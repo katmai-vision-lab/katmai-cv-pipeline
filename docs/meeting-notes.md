@@ -17,3 +17,10 @@
 - Camera operator looking for a bear, zoom bear eat, then looking for another bear
 
 - 2T data
+
+## Jan 15th Internal
+### Agenda
+- Go through project proposal
+- Walk through lab 10:15 Tuesday
+- Sprint 1 Planning
+
