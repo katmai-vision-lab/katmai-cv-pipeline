@@ -74,3 +74,14 @@ katmai-cv-pipeline/
     ├── run_tracking.py
     └── run_counting.py
 ```
+
+## PR Process
+- Do the local development on your own dev branch, eg. dev-yourname
+- Once your code is ready, create a PR merge to main branch
+
+You may use the following commands.
+```
+git checkout -b dev-xxx origin/main
+git pull origin main
+git push origin dev-xxx
+```
