@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.env
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
+.claude/
