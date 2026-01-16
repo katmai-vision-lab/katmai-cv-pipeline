@@ -1,0 +1,29 @@
+# Video Configuration Example
+# Copy this file to video_config.yaml and customize for your videos
+
+# Directory containing raw videos
+video_dir: data/raw_videos
+
+# Default settings (applied to all videos unless overridden)
+defaults:
+  fps: 1.0        # Frames per second to extract
+  format: jpg     # Output format: jpg or png
+  quality: 95     # JPEG quality (1-100)
+
+# Video-specific settings
+# Each video can override the defaults
+videos:
+  - name: "test_video_2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv"
+    start: 10       # Start time in seconds (trim beginning)
+    end: 80         # End time in seconds (trim end)
+    # fps: 2        # Uncomment to override default fps for this video
+
+  # Add more videos below:
+  # - name: video2.mkv
+  #   start: 5
+  #   end: 120
+  #
+  # - name: video3.mp4
+  #   start: 0
+  #   end: 60
+  #   fps: 2        # Extract at 2 fps for this video only

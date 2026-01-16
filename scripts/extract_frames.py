@@ -4,17 +4,24 @@ Frame Extraction Script
 Extract frames from video files for annotation and model training.
 
 Usage:
+    # Single video
     python scripts/extract_frames.py --input data/raw_videos/video.mp4 --output data/frames/
+
+    # Directory (all videos with same settings)
     python scripts/extract_frames.py --input data/raw_videos/ --output data/frames/ --fps 2
 
+    # Batch processing with config file (each video can have different settings)
+    python scripts/extract_frames.py --config config/video_config.yaml --output data/frames/
+
 Requirements:
-    pip install opencv-python
+    pip install opencv-python pyyaml
 """
 
 import argparse
 import cv2
 import os
 from pathlib import Path
+import yaml
 
 
 def extract_frames(
@@ -133,12 +140,72 @@ def process_directory(input_dir: str, output_dir: str, **kwargs):
     print(f"Total: {total_frames} frames extracted")
 
 
+def process_config(config_path: str, output_dir: str, default_fps: float = 1.0, default_format: str = "jpg", default_quality: int = 95):
+    """Process videos based on a YAML config file."""
+    config_path = Path(config_path)
+
+    if not config_path.exists():
+        print(f"Error: Config file not found: {config_path}")
+        return
+
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    videos = config.get("videos", [])
+    if not videos:
+        print("Error: No videos defined in config file")
+        return
+
+    # Get global defaults from config, or use function defaults
+    defaults = config.get("defaults", {})
+    global_fps = defaults.get("fps", default_fps)
+    global_format = defaults.get("format", default_format)
+    global_quality = defaults.get("quality", default_quality)
+    video_dir = config.get("video_dir", "data/raw_videos")
+
+    print(f"Processing {len(videos)} video(s) from config\n")
+
+    total_frames = 0
+    for video_config in videos:
+        video_name = video_config.get("name")
+        if not video_name:
+            print("Warning: Skipping entry without 'name'")
+            continue
+
+        video_path = Path(video_dir) / video_name
+        if not video_path.exists():
+            print(f"Warning: Video not found: {video_path}")
+            continue
+
+        # Get per-video settings, fall back to global defaults
+        fps = video_config.get("fps", global_fps)
+        format = video_config.get("format", global_format)
+        quality = video_config.get("quality", global_quality)
+        start_time = video_config.get("start")
+        end_time = video_config.get("end")
+
+        total_frames += extract_frames(
+            video_path,
+            output_dir,
+            fps=fps,
+            format=format,
+            quality=quality,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    print(f"Total: {total_frames} frames extracted")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Extract frames from video files")
     parser.add_argument(
         "--input", "-i",
-        required=True,
         help="Input video file or directory"
+    )
+    parser.add_argument(
+        "--config", "-c",
+        help="Path to YAML config file for batch processing"
     )
     parser.add_argument(
         "--output", "-o",
@@ -178,30 +245,44 @@ def main():
 
     args = parser.parse_args()
 
-    input_path = Path(args.input)
+    # Check that either --input or --config is provided
+    if not args.input and not args.config:
+        parser.error("Either --input or --config is required")
 
-    if input_path.is_file():
-        extract_frames(
-            args.input,
+    if args.config:
+        # Batch processing with config file
+        process_config(
+            args.config,
             args.output,
-            fps=args.fps,
-            format=args.format,
-            quality=args.quality,
-            start_time=args.start,
-            end_time=args.end,
-        )
-    elif input_path.is_dir():
-        process_directory(
-            args.input,
-            args.output,
-            fps=args.fps,
-            format=args.format,
-            quality=args.quality,
-            start_time=args.start,
-            end_time=args.end,
+            default_fps=args.fps,
+            default_format=args.format,
+            default_quality=args.quality,
         )
     else:
-        print(f"Error: {args.input} is not a valid file or directory")
+        input_path = Path(args.input)
+
+        if input_path.is_file():
+            extract_frames(
+                args.input,
+                args.output,
+                fps=args.fps,
+                format=args.format,
+                quality=args.quality,
+                start_time=args.start,
+                end_time=args.end,
+            )
+        elif input_path.is_dir():
+            process_directory(
+                args.input,
+                args.output,
+                fps=args.fps,
+                format=args.format,
+                quality=args.quality,
+                start_time=args.start,
+                end_time=args.end,
+            )
+        else:
+            print(f"Error: {args.input} is not a valid file or directory")
 
 
 if __name__ == "__main__":
