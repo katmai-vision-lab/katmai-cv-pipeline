@@ -74,6 +74,13 @@ katmai-cv-pipeline/
     ├── run_tracking.py
     └── run_counting.py
 ```
+## Local Dev Setup
+Use conda to manage the virtual environment.
+```
+conda create -n katmai python=3.10 -y
+conda activate katmai
+pip install -r requirements.txt
+```
 
 ## PR Process
 - Do the local development on your own dev branch, eg. dev-yourname
