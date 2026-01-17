@@ -8,72 +8,6 @@ The system is designed to run on a consumer-grade laptop or desktop and ingest s
 
 More information: https://github.com/katmai-vision-lab
 
-## Project Structure
-```arduino
-katmai-cv-pipeline/
-│
-├── README.md
-├── requirements.txt
-|
-├── docs
-│   ├── images
-│   │   └── 20260113-requirement.png
-│   ├── meeting-notes.md
-│
-├── data/
-│   ├── raw/
-│   │   ├── videos/
-│   │   │   ├── bears_cam1.mp4
-│   │   │   └── bears_cam2.mp4
-│   │   └── images/              # extracted frames (optional)
-│   │
-│   ├── annotations/             # only if you fine-tune
-│   │   ├── images/
-│   │   └── labels/
-│   │
-│   └── outputs/
-│       ├── annotated_videos/
-│       ├── frames/
-│       └── logs/
-│
-├── models/
-│   ├── yolov8/
-│   │   └── yolov8n.pt
-│   └── trackers/
-│       ├── bytetrack.yaml
-│       └── deepsort.yaml
-│
-├── src/
-│   ├── config/
-│   │   └── config.yaml
-│   │
-│   ├── detection/
-│   │   └── yolo_detector.py
-│   │
-│   ├── tracking/
-│   │   ├── bytetrack.py
-│   │   └── deepsort.py
-│   │
-│   ├── counting/
-│   │   └── bear_counter.py
-│   │
-│   ├── utils/
-│   │   ├── video_io.py
-│   │   ├── visualization.py
-│   │   └── logger.py
-│   │
-│   └── main.py
-│
-├── notebooks/
-│   ├── 01_explore_video.ipynb
-│   ├── 02_test_yolo.ipynb
-│   └── 03_debug_tracking.ipynb
-│
-└── scripts/
-    ├── run_detection.py
-    ├── run_tracking.py
-    └── run_counting.py
-```
 ## Local Dev Setup
 Use conda to manage the virtual environment.
 ```
@@ -92,3 +26,8 @@ git checkout -b dev-xxx origin/main
 git pull origin main
 git push origin dev-xxx
 ```
+
+## Useful Link
+SharePoint:
+https://uwnetid.sharepoint.com/sites/katmai-vision-lab/Shared%20Documents/Forms/AllItems.aspx
+
