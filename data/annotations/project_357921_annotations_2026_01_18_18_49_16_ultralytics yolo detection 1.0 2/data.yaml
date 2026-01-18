@@ -1,0 +1,5 @@
+Train: Train.txt
+names:
+  0: bear
+  1: salmon
+path: .
