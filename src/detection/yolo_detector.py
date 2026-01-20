@@ -8,11 +8,22 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.config import (
     RAW_DATA_DIR,
     YOLOV8N_PATH,
-    OUTPUTS_DIR
+    OUTPUTS_DIR,
+    TRAINED_MODELS_DIR
 )
 video_path = str(RAW_DATA_DIR) + '/' + '2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv'
 # Load pre-trained model
-model = YOLO(str(YOLOV8N_PATH))  # nano version for speed
+model = YOLO(str(YOLOV8N_PATH))
+
+model.train(
+    data = 'mock.yaml',
+    epochs=30,
+    imgsz=640,
+    batch=8,
+    project=str(TRAINED_MODELS_DIR),
+    name='bear_detector_finetuned',
+    resume=True  # continue from previous training
+)
 
 # Test on your video
 results = model.predict(

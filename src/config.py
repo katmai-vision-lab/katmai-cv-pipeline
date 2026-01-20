@@ -22,7 +22,6 @@ TRAINED_MODELS_DIR = MODELS_DIR / 'trained'
 
 # Output directories
 OUTPUTS_DIR = PROJECT_ROOT / 'outputs'
-PREDICTIONS_DIR = OUTPUTS_DIR / 'predictions'
 
 # Config directory
 CONFIG_DIR = PROJECT_ROOT / 'config'
