@@ -15,15 +15,16 @@ video_path = str(RAW_DATA_DIR) + '/' + '2025-09-19 23-30-11_Brooks_Falls_Low_rea
 # Load pre-trained model
 model = YOLO(str(YOLOV8N_PATH))
 
-model.train(
-    data = 'mock.yaml',
-    epochs=30,
-    imgsz=640,
-    batch=8,
-    project=str(TRAINED_MODELS_DIR),
-    name='bear_detector_finetuned',
-    resume=True  # continue from previous training
-)
+# TODO: waiting for CVAT frames
+# model.train(
+#     data = 'mock.yaml',
+#     epochs=30,
+#     imgsz=640,
+#     batch=8,
+#     project=str(TRAINED_MODELS_DIR),
+#     name='bear_detector_finetuned',
+#     resume=True  # continue from previous training
+# )
 
 # Test on your video
 results = model.predict(
