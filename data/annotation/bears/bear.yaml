@@ -1,0 +1,7 @@
+path: /Users/panopano/Develop/project/uw/katmai-cv-pipeline/data/bears
+train: images/train
+val: images/val
+
+nc: 1
+names:
+  0: bear
