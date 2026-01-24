@@ -27,6 +27,80 @@ git pull origin main
 git push origin dev-xxx
 ```
 
+## Run Pipeline
+### Training Only
+```bash
+# Train a new model
+python -m src.detection.train \
+    --data data/bears/bear.yaml \
+    --epochs 3 \
+    --batch 8 \
+    --name bear_detector_v1
+
+# Resume training
+python -m src.detection.train \
+    --data data/bears/bear.yaml \
+    --resume
+```
+
+### Prediction Only
+```bash
+# Using pretrained COCO model
+python -m src.detection.predict \
+    --video "2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
+    --conf 0.25
+
+# Using your trained model
+python -m src.detection.predict \
+    --video "2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
+    --model models/trained/bear_detector_v1/weights/best.pt \
+    --conf 0.25
+```
+
+## Evaluation Only
+```bash
+# Evaluate pre-trained model
+python -m src.detection.evaluate \
+     --video "2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
+    --ground-truth 5 \
+    --plot
+
+# Evaluate model performance
+python -m src.detection.evaluate \
+    --video "2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
+    --model models/trained/bear_detector_v1/weights/best.pt \
+    --ground-truth 5 \
+    --plot
+
+# Compare pretrained vs trained
+# python -m src.detection.evaluate \
+#     --video "2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
+#     --model models/pretrained/yolov8n.pt \
+#     --ground-truth 5
+# ```
+
+## Full Pipeline (Train → Predict → Evaluate)
+```bash
+python -m src.main \
+    --mode full \
+    --video "2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
+    --data data/bears/bear.yaml \
+    --epochs 3 \
+    --conf 0.12 \
+    --ground-truth 5
+```
+
+```bash
+python -m src.main \
+    --mode full \
+    --video "2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
+    --skip-train \
+    --epochs 3 \
+    --conf 0.12 \
+    --ground-truth 5
+```
+
+
 ## Useful Link
 SharePoint:
 https://uwnetid.sharepoint.com/sites/katmai-vision-lab/Shared%20Documents/Forms/AllItems.aspx
