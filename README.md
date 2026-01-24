@@ -28,6 +28,7 @@ git push origin dev-xxx
 ```
 
 ## Run Pipeline
+Delete /predictions folder each time before you run pipeline.
 ### Training Only
 ```bash
 # Train a new model
