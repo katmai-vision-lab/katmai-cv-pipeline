@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+from datetime import datetime
 from pathlib import Path
 import sys
 
@@ -84,10 +85,11 @@ def run_full_pipeline(video_path, data_yaml=None, model_path=None, epochs=3,
     eval_dir = PREDICTIONS_DIR / 'evaluations'
     eval_dir.mkdir(parents=True, exist_ok=True)
 
-    csv_path = eval_dir / "pipeline_evaluation.csv"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    csv_path = eval_dir / f"pipeline_evaluation_{timestamp}.csv"
     df.to_csv(csv_path, index=False)
 
-    plot_path = eval_dir / "pipeline_evaluation.png"
+    plot_path = eval_dir / f"pipeline_evaluation_{timestamp}.png"
     plot_evaluation(df, plot_path)
 
     print("\n" + "="*60)
