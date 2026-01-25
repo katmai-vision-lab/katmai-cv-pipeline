@@ -15,3 +15,9 @@ venv/
 .claude/
 
 data/raw
+
+# ignore prediction output
+predictions
+
+# ignore trained model
+models/trained

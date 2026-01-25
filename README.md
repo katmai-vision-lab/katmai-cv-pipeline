@@ -26,6 +26,40 @@ git checkout -b dev-xxx origin/main
 git pull origin main
 git push origin dev-xxx
 ```
+## Run Pipeline
+Quick test with pretrained model.
+```bash
+python -m src.main \
+    --mode full \
+    --video "bears/2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
+    --skip-train \
+    --epochs 3 \
+    --conf 0.12 \
+    --ground-truth 5
+```
+
+Train + predict + evaluate (original full pipeline).
+```bash
+python -m src.main \
+    --mode full \
+    --video "bears/2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
+    --data data/annotation/bears/bear.yaml \
+    --epochs 3 \
+    --conf 0.25 \
+    --ground-truth 5
+```
+
+Use your fine-tuned model.
+```bash
+python -m src.main \
+    --mode full \
+    --video "bears/2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
+    --model models/trained/pipeline_trained_model/weights/best.pt \
+    --skip-train \
+    --epochs 3 \
+    --conf 0.12 \
+    --ground-truth 5
+```
 
 ## Useful Link
 SharePoint:
