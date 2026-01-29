@@ -61,6 +61,13 @@ python -m src.main \
     --ground-truth 5
 ```
 
+Bear counting batch.
+```bash
+python -m src.detection.bear_count \
+    --video-dir bears \
+    --pattern "*.mkv"
+```
+
 ## Useful Link
 SharePoint:
 https://uwnetid.sharepoint.com/sites/katmai-vision-lab/Shared%20Documents/Forms/AllItems.aspx
