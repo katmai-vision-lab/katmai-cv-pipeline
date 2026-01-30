@@ -3,8 +3,14 @@ src/detection/evaluate.py
 Evaluate bear detection model on videos
 
 Usage:
-    python -m src.detection.evaluate --video bears.mkv --model model.pt
-    python -m src.detection.evaluate --video bears.mkv --ground-truth 5
+    # Dataset evaluation (uses YOLO's built-in validation)
+    python -m src.detection.evaluate --mode dataset --data data/annotation/bears/bear.yaml
+    
+    # Counting evaluation (simple bear counting)
+    python -m src.detection.evaluate --mode counting --video bears.mkv --ground-truth 5
+    
+    # Legacy simple evaluation
+    python -m src.detection.evaluate --mode simple --video bears.mkv
 """
 
 import argparse
@@ -17,9 +23,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.detection.detector import BearDetector
-from src.config import YOLOV8N_PATH, PREDICTIONS_DIR, RAW_DATA_DIR
+from src.detection.metrics import VideoEvaluator
+from src.config import YOLOV8N_PATH, PREDICTIONS_DIR, RAW_DATA_DIR, DATA_DIR
 
-def evaluate_video(detector, video_path, ground_truth_count=None, conf=0.25, classes=None):
+def evaluate_video(detector, video_path, ground_truth_count=None, conf=0.25):
     """
     Evaluate model on video and analyze performance
     
@@ -28,7 +35,6 @@ def evaluate_video(detector, video_path, ground_truth_count=None, conf=0.25, cla
         video_path: Path to video
         ground_truth_count: Optional ground truth bear count
         conf: Confidence threshold
-        classes: Classes to detect (None = all classes)
     
     Returns:
         DataFrame with per-frame statistics
@@ -47,7 +53,6 @@ def evaluate_video(detector, video_path, ground_truth_count=None, conf=0.25, cla
     results = detector.model.predict(
         source=str(video_path),
         conf=conf,
-        classes=classes,
         stream=True,
         verbose=False
     )
@@ -113,46 +118,96 @@ def plot_evaluation(df, output_path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Evaluate bear detection model')
-    parser.add_argument('--video', type=str, required=True,
-                       help='Video filename or path')
+    parser = argparse.ArgumentParser(
+        description='Comprehensive bear detection evaluation',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Evaluate on validation dataset (recommended - uses YOLO's mAP/precision/recall)
+  python -m src.detection.evaluate --mode dataset --data data/annotation/bears/bear.yaml
+  
+  # Evaluate counting accuracy on video
+  python -m src.detection.evaluate --mode counting --video bears.mkv --ground-truth 5
+  
+  # Simple frame-by-frame analysis
+  python -m src.detection.evaluate --mode simple --video bears.mkv
+        """
+    )
+    
+    parser.add_argument('--mode', type=str, 
+                       choices=['dataset', 'counting', 'simple'],
+                       default='simple',
+                       help='Evaluation mode: dataset (YOLO val), counting, or simple')
+    parser.add_argument('--video', type=str, default=None,
+                       help='Video filename or path (required for counting/simple modes)')
+    parser.add_argument('--data', type=str, default=None,
+                       help='Dataset YAML path (required for dataset mode)')
     parser.add_argument('--model', type=str, default=str(YOLOV8N_PATH),
-                       help='Path to model')
+                       help='Path to model weights')
     parser.add_argument('--conf', type=float, default=0.25,
                        help='Confidence threshold')
     parser.add_argument('--ground-truth', type=int, default=None,
-                       help='Ground truth bear count')
+                       help='Ground truth bear count (for counting mode)')
+    parser.add_argument('--frame-skip', type=int, default=1,
+                       help='Process every Nth frame (for counting mode)')
     parser.add_argument('--plot', action='store_true',
                        help='Generate evaluation plots')
-    parser.add_argument('--classes', type=int, nargs='+', default=None,
-                       help='Classes to detect (default: None for all classes)')
     
     args = parser.parse_args()
     
-    # Initialize detector
+    # Validation
+    if args.mode == 'dataset' and not args.data:
+        parser.error("--data is required for dataset mode")
+    if args.mode in ['counting', 'simple'] and not args.video:
+        parser.error("--video is required for counting/simple modes")
+    if args.mode == 'counting' and args.ground_truth is None:
+        parser.error("--ground-truth is required for counting mode")
+    
+    # Initialize detector and evaluator
     detector = BearDetector(model_path=args.model)
+    evaluator = VideoEvaluator(detector, conf_threshold=args.conf)
     
-    # Evaluate
-    df = evaluate_video(
-        detector=detector,
-        video_path=args.video,
-        ground_truth_count=args.ground_truth,
-        conf=args.conf,
-        classes=args.classes
-    )
-    
-    # Save results
+    # Create output directory
     output_dir = PREDICTIONS_DIR / 'evaluations'
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    csv_path = output_dir / f"eval_{Path(args.video).stem}.csv"
-    df.to_csv(csv_path, index=False)
-    print(f"\n✓ Results saved: {csv_path}")
-    
-    # Generate plots if requested
-    if args.plot:
-        plot_path = output_dir / f"eval_{Path(args.video).stem}.png"
-        plot_evaluation(df, plot_path)
+    # Execute based on mode
+    if args.mode == 'dataset':
+        # YOLO native validation - comprehensive metrics
+        data_yaml = args.data
+        if not Path(data_yaml).is_absolute():
+            data_yaml = DATA_DIR / 'annotation' / 'bears' / data_yaml
+        
+        metrics = evaluator.evaluate_dataset_with_yolo(
+            data_yaml=str(data_yaml),
+            save_dir=output_dir
+        )
+        
+    elif args.mode == 'counting':
+        # Counting accuracy evaluation
+        df = evaluator.evaluate_counting_accuracy(
+            video_path=args.video,
+            ground_truth_counts=args.ground_truth,
+            frame_skip=args.frame_skip,
+            save_dir=output_dir
+        )
+        
+    elif args.mode == 'simple':
+        # Simple frame-by-frame analysis (legacy)
+        df = evaluate_video(
+            detector=detector,
+            video_path=args.video,
+            ground_truth_count=args.ground_truth,
+            conf=args.conf
+        )
+        
+        csv_path = output_dir / f"simple_eval_{Path(args.video).stem}.csv"
+        df.to_csv(csv_path, index=False)
+        print(f"\n✓ Results saved: {csv_path}")
+        
+        if args.plot:
+            plot_path = output_dir / f"simple_eval_{Path(args.video).stem}.png"
+            plot_evaluation(df, plot_path)
 
 
 if __name__ == '__main__':
