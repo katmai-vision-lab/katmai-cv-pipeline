@@ -54,11 +54,12 @@ Use your fine-tuned model.
 python -m src.main \
     --mode full \
     --video "bears/2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
-    --model models/trained/pipeline_trained_model/weights/best.pt \
+    --model models/trained/bear_detector/weights/best.pt \
     --skip-train \
-    --epochs 3 \
-    --conf 0.12 \
+    --classes 0 \
+    --conf 0.25 \
     --ground-truth 5
+```
 ```
 
 Bear counting batch.
@@ -71,4 +72,3 @@ python -m src.detection.bear_count \
 ## Useful Link
 SharePoint:
 https://uwnetid.sharepoint.com/sites/katmai-vision-lab/Shared%20Documents/Forms/AllItems.aspx
-
