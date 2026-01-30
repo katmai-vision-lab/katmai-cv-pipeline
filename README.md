@@ -61,6 +61,14 @@ python -m src.main \
     --conf 0.12 \
     --ground-truth 5
 ```
+```
+
+Bear counting batch.
+```bash
+python -m src.detection.bear_count \
+    --video-dir bears \
+    --pattern "*.mkv"
+```
 
 ## Useful Link
 SharePoint:
