@@ -119,6 +119,8 @@ def main():
                        help='Ground truth bear count')
     parser.add_argument('--skip-train', action='store_true',
                        help='Skip training in full mode (use existing model)')
+    parser.add_argument('--classes', type=int, nargs='+', default=None,
+                       help='Classes to detect (e.g., 21 for COCO bear, 0 for custom bear)')
 
     args = parser.parse_args()
 

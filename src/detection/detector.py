@@ -5,7 +5,7 @@ import json
 import time
 from datetime import datetime
 import numpy as np
-import tqdm
+from tqdm import tqdm
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -107,7 +107,7 @@ class BearDetector:
         return results
 
     def predict_video(self, video_path, output_name=None, conf=0.25, 
-                      classes=21, save=True, **kwargs):
+                      classes=None, save=True, **kwargs):
         """
         Run detection on video
         
@@ -145,7 +145,7 @@ class BearDetector:
         print(f"Output: {PREDICTIONS_DIR / output_name}")
         print(f"{'='*60}\n")
 
-        # Run prediction
+        # Run prediction with streaming to avoid memory overload
         results = self.model.predict(
             source=str(video_path),
             conf=conf,
@@ -156,18 +156,19 @@ class BearDetector:
             project=str(PREDICTIONS_DIR),
             name=output_name,
             exist_ok=True,
+            stream=True,  
             **kwargs
         )
 
         output_dir = PREDICTIONS_DIR / output_name
 
-        # Save metadata
+        # Save metadata 
         self._save_prediction_metadata(video_path, output_dir, conf, results)
 
         print(f"\n✓ Detection complete!")
         print(f"Results: {output_dir}")
 
-        return results, output_dir
+        return None, output_dir
 
     def count_bears_in_video(self, video_path, conf=0.25, frame_skip=30, 
                             classes=21, verbose=True):
@@ -343,98 +344,6 @@ class BearDetector:
         
         return results
 
-    def batch_count_bears(self, video_paths=None, video_dir=None, pattern='*.mkv',
-                         conf=0.25, frame_skip=30, classes=21, ground_truth=None,
-                         save_results=True):
-        """
-        Count bears in multiple videos (batch processing)
-        
-        Args:
-            video_paths: List of video file paths
-            video_dir: Directory containing videos (alternative to video_paths)
-            pattern: Glob pattern for videos in video_dir (default: *.mkv)
-            conf: Confidence threshold
-            frame_skip: Process every Nth frame
-            classes: Class ID(s) to detect
-            ground_truth: Dict mapping video names to actual bear counts
-            save_results: Save results to JSON and CSV
-            
-        Returns:
-            dict with batch results and aggregate statistics
-        """
-        # Get video list
-        if video_paths is None:
-            if video_dir is None:
-                raise ValueError("Either video_paths or video_dir must be provided")
-            
-            video_dir = Path(video_dir)
-            if not video_dir.is_absolute():
-                video_dir = RAW_DATA_DIR / video_dir
-            
-            video_paths = list(video_dir.glob(pattern))
-            
-            if not video_paths:
-                raise ValueError(f"No videos found in {video_dir} matching '{pattern}'")
-        
-        print(f"\n{'='*70}")
-        print(f"BATCH BEAR COUNTING: {len(video_paths)} videos")
-        print(f"{'='*70}")
-        
-        # Process each video
-        results = {
-            'timestamp': datetime.now().isoformat(),
-            'model': str(self.model_path),
-            'config': {
-                'confidence': conf,
-                'frame_skip': frame_skip,
-                'classes': classes
-            },
-            'videos': []
-        }
-        
-        for video_path in tqdm.tqdm(video_paths, desc="Processing videos"):
-            try:
-                # Count bears in this video
-                stats = self.count_bears_in_video(
-                    video_path=video_path,
-                    conf=conf,
-                    frame_skip=frame_skip,
-                    classes=classes,
-                    verbose=False
-                )
-                
-                # Add ground truth if available
-                if ground_truth and stats['video_name'] in ground_truth:
-                    stats['ground_truth'] = ground_truth[stats['video_name']]
-                    stats['accuracy'] = (
-                        stats['unique_bear_estimate'] == stats['ground_truth']
-                    )
-                
-                results['videos'].append(stats)
-                
-                # Print progress
-                print(f"  ✓ {stats['video_name']}: {stats['unique_bear_estimate']} bears")
-                
-            except Exception as e:
-                print(f"  ❌ Error processing {Path(video_path).name}: {e}")
-                results['videos'].append({
-                    'video_name': Path(video_path).name,
-                    'error': str(e),
-                    'status': 'failed'
-                })
-        
-        # Calculate aggregate statistics
-        results['aggregate'] = self._calculate_aggregate_stats(results['videos'])
-        
-        # Save results if requested
-        if save_results:
-            self._save_batch_results(results)
-        
-        # Print summary
-        self._print_batch_summary(results)
-        
-        return results
-
     def _calculate_aggregate_stats(self, video_results):
         """Calculate statistics across all videos"""
         successful = [v for v in video_results if 'error' not in v]
@@ -475,12 +384,6 @@ class BearDetector:
         output_dir = PREDICTIONS_DIR / 'batch_counting' / f'batch_{timestamp}'
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        # print("======results=====")
-        # print(len(results))
-
-        # with open("results.txt", "w") as f:
-        #     for k, v in results.items():
-        #         f.write(f"{k}: {v}\n")
 
         # Save full JSON
         json_path = output_dir / 'batch_results.json'
@@ -536,16 +439,24 @@ class BearDetector:
 
     def _save_prediction_metadata(self, video_path, output_dir, conf, results):
         """Save prediction metadata"""
-        total_detections = sum(len(r.boxes) for r in results)
+        # 只遍历一次流式生成器，同时收集帧数和检测数
+        total_frames = 0
+        total_detections = 0
+        
+        for result in results:
+            total_frames += 1
+            boxes = result.boxes
+            if boxes is not None:
+                total_detections += len(boxes)
 
         metadata = {
             'timestamp': datetime.now().isoformat(),
             'video': str(video_path),
             'model': str(self.model_path),
             'confidence_threshold': conf,
-            'total_frames': len(results),
+            'total_frames': total_frames,
             'total_detections': total_detections,
-            'avg_detections_per_frame': total_detections / len(results) if results else 0
+            'avg_detections_per_frame': total_detections / total_frames if total_frames > 0 else 0
         }
 
         with open(output_dir / 'metadata.json', 'w') as f:
