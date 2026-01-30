@@ -1,4 +1,4 @@
-path: /Users/panopano/Develop/project/uw/katmai-cv-pipeline/data/bears
+path: ./data/annotation/bears
 train: images/train
 val: images/val
 
