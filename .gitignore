@@ -6,6 +6,8 @@ __pycache__/
 *.py[cod]
 .env
 venv/
+.venv/
+.python-version
 
 # IDE
 .vscode/
@@ -14,4 +16,20 @@ venv/
 # Claude Code
 .claude/
 
-data/raw
+# Data (too large for git)
+data/raw/
+data/annotation/bears/images/
+data/annotation/bears/labels/
+
+# Models (too large for git)
+# Keep bear_detector (best model), exclude others
+models/trained/pipeline_trained_model*/
+models/trained/bear_detector2/
+models/pretrained/*.pt
+
+# Predictions/Results
+predictions/
+
+# Debug/Test scripts
+debug_*.py
+test_*.py
