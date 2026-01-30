@@ -2,7 +2,11 @@ from ultralytics import YOLO
 from pathlib import Path
 import sys
 import json
+import time
 from datetime import datetime
+import numpy as np
+from tqdm import tqdm
+import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -33,44 +37,10 @@ class BearDetector:
         Initialize detector
         
         Args:
-            model_path: Path to model file. If None, uses latest trained model with best mAP50
+            model_path: Path to model file. If None, uses yolov8n pretrained
         """
         if model_path is None:
-            # 用最佳的自训练模型（按mAP50评分）
-            trained_dir = TRAINED_MODELS_DIR
-            model_dirs = [d for d in trained_dir.iterdir() if d.is_dir()]
-            
-            best_model = None
-            best_mAP50 = -1
-            
-            # 检查每个模型的结果
-            for model_dir in model_dirs:
-                results_csv = model_dir / 'results.csv'
-                if results_csv.exists():
-                    try:
-                        with open(results_csv, 'r') as f:
-                            lines = f.readlines()
-                            if len(lines) > 1:
-                                # 读取最后一行（最好的epoch）
-                                last_line = lines[-1].strip()
-                                values = last_line.split(',')
-                                # mAP50(B) 通常在第8列 (0-indexed: 7)
-                                if len(values) > 7:
-                                    try:
-                                        mAP50 = float(values[7])
-                                        if mAP50 > best_mAP50:
-                                            best_mAP50 = mAP50
-                                            best_model = model_dir
-                                    except (ValueError, IndexError):
-                                        pass
-                    except Exception:
-                        pass
-            
-            if best_model:
-                model_path = best_model / 'weights' / 'best.pt'
-                print(f"🏆 Auto-selected best model: {best_model.name} (mAP50={best_mAP50:.4f})")
-            else:
-                model_path = YOLOV8N_PATH
+            model_path = YOLOV8N_PATH
         else:
             model_path = Path(model_path)
 
@@ -79,7 +49,7 @@ class BearDetector:
 
         self.model_path = model_path
         self.model = YOLO(str(model_path))
-        print(f"✓ Loaded model: {model_path.parent.parent.name} ({model_path})")
+        print(f"✓ Loaded model: {model_path.name}")
 
 
     def train(self, data_yaml, epochs=50, imgsz=640, batch=8, 
@@ -186,19 +156,20 @@ class BearDetector:
             project=str(PREDICTIONS_DIR),
             name=output_name,
             exist_ok=True,
-            stream=True,
+            stream=True,  
             **kwargs
         )
 
         output_dir = PREDICTIONS_DIR / output_name
 
-        # Save metadata
+        # Save metadata 
         self._save_prediction_metadata(video_path, output_dir, conf, results)
 
         print(f"\n✓ Detection complete!")
         print(f"Results: {output_dir}")
 
-        return results, output_dir
+        return None, output_dir
+
     def count_bears_in_video(self, video_path, conf=0.25, frame_skip=30, 
                             classes=21, verbose=True):
         """
@@ -373,98 +344,6 @@ class BearDetector:
         
         return results
 
-    def batch_count_bears(self, video_paths=None, video_dir=None, pattern='*.mkv',
-                         conf=0.25, frame_skip=30, classes=21, ground_truth=None,
-                         save_results=True):
-        """
-        Count bears in multiple videos (batch processing)
-        
-        Args:
-            video_paths: List of video file paths
-            video_dir: Directory containing videos (alternative to video_paths)
-            pattern: Glob pattern for videos in video_dir (default: *.mkv)
-            conf: Confidence threshold
-            frame_skip: Process every Nth frame
-            classes: Class ID(s) to detect
-            ground_truth: Dict mapping video names to actual bear counts
-            save_results: Save results to JSON and CSV
-            
-        Returns:
-            dict with batch results and aggregate statistics
-        """
-        # Get video list
-        if video_paths is None:
-            if video_dir is None:
-                raise ValueError("Either video_paths or video_dir must be provided")
-            
-            video_dir = Path(video_dir)
-            if not video_dir.is_absolute():
-                video_dir = RAW_DATA_DIR / video_dir
-            
-            video_paths = list(video_dir.glob(pattern))
-            
-            if not video_paths:
-                raise ValueError(f"No videos found in {video_dir} matching '{pattern}'")
-        
-        print(f"\n{'='*70}")
-        print(f"BATCH BEAR COUNTING: {len(video_paths)} videos")
-        print(f"{'='*70}")
-        
-        # Process each video
-        results = {
-            'timestamp': datetime.now().isoformat(),
-            'model': str(self.model_path),
-            'config': {
-                'confidence': conf,
-                'frame_skip': frame_skip,
-                'classes': classes
-            },
-            'videos': []
-        }
-        
-        for video_path in tqdm.tqdm(video_paths, desc="Processing videos"):
-            try:
-                # Count bears in this video
-                stats = self.count_bears_in_video(
-                    video_path=video_path,
-                    conf=conf,
-                    frame_skip=frame_skip,
-                    classes=classes,
-                    verbose=False
-                )
-                
-                # Add ground truth if available
-                if ground_truth and stats['video_name'] in ground_truth:
-                    stats['ground_truth'] = ground_truth[stats['video_name']]
-                    stats['accuracy'] = (
-                        stats['unique_bear_estimate'] == stats['ground_truth']
-                    )
-                
-                results['videos'].append(stats)
-                
-                # Print progress
-                print(f"  ✓ {stats['video_name']}: {stats['unique_bear_estimate']} bears")
-                
-            except Exception as e:
-                print(f"  ❌ Error processing {Path(video_path).name}: {e}")
-                results['videos'].append({
-                    'video_name': Path(video_path).name,
-                    'error': str(e),
-                    'status': 'failed'
-                })
-        
-        # Calculate aggregate statistics
-        results['aggregate'] = self._calculate_aggregate_stats(results['videos'])
-        
-        # Save results if requested
-        if save_results:
-            self._save_batch_results(results)
-        
-        # Print summary
-        self._print_batch_summary(results)
-        
-        return results
-
     def _calculate_aggregate_stats(self, video_results):
         """Calculate statistics across all videos"""
         successful = [v for v in video_results if 'error' not in v]
@@ -504,6 +383,7 @@ class BearDetector:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_dir = PREDICTIONS_DIR / 'batch_counting' / f'batch_{timestamp}'
         output_dir.mkdir(parents=True, exist_ok=True)
+        
 
         # Save full JSON
         json_path = output_dir / 'batch_results.json'
@@ -556,13 +436,10 @@ class BearDetector:
         
         print(f"\n⏱️  Total Processing Time: {agg.get('total_processing_time', 0):.1f}s")
         print(f"{'='*70}\n")
+
     def _save_prediction_metadata(self, video_path, output_dir, conf, results):
         """Save prediction metadata"""
-        total_detections = sum(len(r.boxes) for r in results)
-
-
-
-        # Process streaming results and collect metadata
+        # 只遍历一次流式生成器，同时收集帧数和检测数
         total_frames = 0
         total_detections = 0
         
@@ -572,7 +449,6 @@ class BearDetector:
             if boxes is not None:
                 total_detections += len(boxes)
 
-        # Save metadata
         metadata = {
             'timestamp': datetime.now().isoformat(),
             'video': str(video_path),
@@ -585,8 +461,3 @@ class BearDetector:
 
         with open(output_dir / 'metadata.json', 'w') as f:
             json.dump(metadata, f, indent=2)
-
-        print(f"\n✓ Detection complete!")
-        print(f"Results: {output_dir}")
-
-        return results, output_dir
