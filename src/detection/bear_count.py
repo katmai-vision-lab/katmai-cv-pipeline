@@ -29,7 +29,9 @@ def main():
                        help='Confidence threshold (default: 0.25)')
     parser.add_argument('--frame-skip', type=int, default=30,
                        help='Process every Nth frame (default: 30, ~1fps)')
-    
+    parser.add_argument('--classes', type=int, nargs='+', default=None,
+                       help='Class ID(s) to detect (e.g., 0 for custom bear, 21 for COCO bear)')
+
     # Ground truth
     parser.add_argument('--ground-truth', type=str, default=None,
                        help='JSON file: {"video1.mkv": 5, "video2.mkv": 3}')
@@ -58,6 +60,7 @@ def main():
         pattern=args.pattern,
         conf=args.conf,
         frame_skip=args.frame_skip,
+        classes=args.classes,
         ground_truth=ground_truth,
         save_results=not args.no_save
     )

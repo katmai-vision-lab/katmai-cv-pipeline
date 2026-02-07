@@ -105,8 +105,8 @@ def main():
     parser = argparse.ArgumentParser(description='Bear Detection Pipeline')
     parser.add_argument('--mode', type=str, choices=['full', 'train', 'predict', 'evaluate'],
                        default='predict', help='Pipeline mode')
-    parser.add_argument('--video', type=str, required=True,
-                       help='Video file')
+    parser.add_argument('--video', type=str, required=False,
+                       help='Video file (required for predict/evaluate/full modes)')
     parser.add_argument('--data', type=str, default=None,
                        help='Dataset YAML (required for training)')
     parser.add_argument('--model', type=str, default=str(YOLOV8N_PATH),
