@@ -24,3 +24,5 @@
 - Walk through lab 10:15 Tuesday
 - Sprint 1 Planning
 
+## Feb 3 Sponsor
+- Format docs using https://jupyterbook.org/
