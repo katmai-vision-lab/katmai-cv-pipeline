@@ -94,3 +94,8 @@ Planned or possible improvements include:
 - Temporal smoothing of detection counts
 - Integration with a visualization dashboard
 - Improved evaluation with ground-truth annotations
+
+# References
+https://github.com/katmai-vision-lab/.github/issues/39
+
+https://github.com/katmai-vision-lab/katmai-cv-pipeline/pull/10
