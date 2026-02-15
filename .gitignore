@@ -14,10 +14,11 @@ venv/
 # Claude Code
 .claude/
 
+# ignore raw data
 data/raw
 
 # ignore prediction output
 predictions
 
-# ignore trained model
-models/trained
+# ignore model files
+models/
