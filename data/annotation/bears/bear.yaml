@@ -1,7 +1,0 @@
-path: ./data/annotation/bears
-train: images/train
-val: images/val
-
-nc: 1
-names:
-  0: bear
