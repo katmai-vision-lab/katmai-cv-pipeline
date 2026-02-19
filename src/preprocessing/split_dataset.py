@@ -24,24 +24,27 @@ def split_dataset(input_dir, train_ratio=0.8, val_ratio=0.2, seed=42):
     if not labels_dir.exists():
         raise ValueError(f"Labels directory not found: {labels_dir}")
     
-    # Get all image files
+    # Recursively get all image files (including subdirectories)
     image_files = []
     for ext in ['*.jpg', '*.jpeg', '*.png', '*.JPG', '*.JPEG', '*.PNG']:
-        image_files.extend(images_dir.glob(ext))
+        image_files.extend(images_dir.rglob(ext))  # rglob instead of glob
     
     if not image_files:
         raise ValueError(f"No image files found in {images_dir}")
     
-    print(f"Found {len(image_files)} images")
+    print(f"Found {len(image_files)} images (including subdirectories)")
     
     # Check for corresponding labels
     valid_files = []
     for img_file in image_files:
-        label_file = labels_dir / f"{img_file.stem}.txt"
+        # Get relative path from images_dir to maintain folder structure
+        rel_path = img_file.relative_to(images_dir)
+        label_file = labels_dir / rel_path.parent / f"{img_file.stem}.txt"
+        
         if label_file.exists():
             valid_files.append(img_file)
         else:
-            print(f"⚠️  Warning: No label file for {img_file.name}")
+            print(f"⚠️  Warning: No label file for {rel_path}")
     
     print(f"Found {len(valid_files)} image-label pairs")
     
@@ -57,7 +60,7 @@ def split_dataset(input_dir, train_ratio=0.8, val_ratio=0.2, seed=42):
     print(f"  Training: {len(train_files)} samples ({train_ratio*100:.0f}%)")
     print(f"  Validation: {len(val_files)} samples ({val_ratio*100:.0f}%)")
     
-    # Create directories
+    # Create base directories
     train_img_dir = input_dir / 'images' / 'train'
     train_lbl_dir = input_dir / 'labels' / 'train'
     val_img_dir = input_dir / 'images' / 'val'
@@ -66,15 +69,21 @@ def split_dataset(input_dir, train_ratio=0.8, val_ratio=0.2, seed=42):
     for d in [train_img_dir, train_lbl_dir, val_img_dir, val_lbl_dir]:
         d.mkdir(parents=True, exist_ok=True)
     
-    # Move files
+    # Move files (flatten structure - all files go directly into train/val)
     print("\nMoving files...")
     for img_file in train_files:
-        label_file = labels_dir / f"{img_file.stem}.txt"
+        rel_path = img_file.relative_to(images_dir)
+        label_file = labels_dir / rel_path.parent / f"{img_file.stem}.txt"
+        
+        # Move to train (flatten - use only filename)
         shutil.move(str(img_file), str(train_img_dir / img_file.name))
         shutil.move(str(label_file), str(train_lbl_dir / label_file.name))
     
     for img_file in val_files:
-        label_file = labels_dir / f"{img_file.stem}.txt"
+        rel_path = img_file.relative_to(images_dir)
+        label_file = labels_dir / rel_path.parent / f"{img_file.stem}.txt"
+        
+        # Move to val (flatten - use only filename)
         shutil.move(str(img_file), str(val_img_dir / img_file.name))
         shutil.move(str(label_file), str(val_lbl_dir / label_file.name))
     
@@ -83,6 +92,7 @@ def split_dataset(input_dir, train_ratio=0.8, val_ratio=0.2, seed=42):
     print(f"  Train labels: {train_lbl_dir}")
     print(f"  Val images: {val_img_dir}")
     print(f"  Val labels: {val_lbl_dir}")
+    print(f"\n📝 Note: All files have been flattened into train/val folders")
 
 
 if __name__ == '__main__':
