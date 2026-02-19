@@ -1,0 +1,19 @@
+# ByteTrack configuration for bear tracking
+# Optimized for reducing ID fragmentation and improving tracking accuracy
+
+tracker_type: bytetrack
+
+# Confidence thresholds
+# Lower thresholds to match detection confidence levels
+track_high_thresh: 0.4   # High confidence threshold (was 0.5)
+track_low_thresh: 0.15   # Low confidence threshold (was 0.1)
+new_track_thresh: 0.5    # Threshold for creating new tracks (was 0.6)
+
+# Track management
+# Increase buffer to reduce ID fragmentation
+track_buffer: 60         # Frames to keep lost tracks (was 30, 60≈2s at 30fps)
+match_thresh: 0.7        # IoU threshold for matching (was 0.8, lower=more lenient)
+
+# Optional settings
+min_box_area: 10         # Minimum bounding box area
+mot20: False             # MOT20 dataset format

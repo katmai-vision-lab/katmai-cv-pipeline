@@ -251,6 +251,175 @@ class BearDetector:
 
         return stats
 
+    def track_bears_in_video(self, video_path, conf=0.25, frame_skip=30, 
+                            classes=21, tracker='bytetrack', verbose=True):
+        """
+        Track bears in a video using ByteTrack (returns unique bear count)
+        
+        Args:
+            video_path: Path to video file
+            conf: Confidence threshold
+            frame_skip: Process every Nth frame  
+            classes: Class ID(s) to detect
+            tracker: Tracker config ('bytetrack', 'botsort', or path to yaml)
+            verbose: Print progress
+            
+        Returns:
+            dict with tracking statistics
+        """
+        video_path = Path(video_path)
+        if not video_path.is_absolute():
+            video_path = RAW_DATA_DIR / video_path
+
+        if not video_path.exists():
+            raise FileNotFoundError(f"Video not found: {video_path}")
+
+        if verbose:
+            print(f"\n📹 Tracking bears in: {video_path.name}")
+        
+        start_time = time.time()
+        
+        # Use model.track() instead of model.predict()
+        results = self.model.track(
+            source=str(video_path),
+            conf=conf,
+            classes=classes,
+            tracker=tracker if tracker.endswith('.yaml') else f'{tracker}.yaml',
+            save=False,
+            stream=True,
+            verbose=False,
+            vid_stride=frame_skip,
+            persist=True
+        )
+
+        # Collect tracking data
+        frame_data = []
+        bear_counts_per_frame = []
+        unique_track_ids = set()
+
+        for frame_id, result in enumerate(results):
+            boxes = result.boxes
+            num_bears = len(boxes)
+            
+            # Get track IDs
+            track_ids = []
+            if boxes.id is not None:
+                track_ids = boxes.id.cpu().numpy().astype(int).tolist()
+                unique_track_ids.update(track_ids)
+            
+            confidences = boxes.conf.cpu().numpy() if len(boxes) > 0 else []
+
+            bear_counts_per_frame.append(num_bears)
+            frame_data.append({
+                'frame': frame_id * frame_skip,
+                'num_bears': num_bears,
+                'track_ids': track_ids,
+                'avg_confidence': confidences.mean() if len(confidences) > 0 else 0
+            })
+
+        duration = time.time() - start_time
+        bear_counts_array = np.array(bear_counts_per_frame)
+
+        stats = {
+            'video_name': video_path.name,
+            'video_path': str(video_path),
+            'processing_time': duration,
+            'tracker': tracker,
+            'frames_analyzed': len(frame_data),
+            'frames_with_bears': int((bear_counts_array > 0).sum()),
+            'max_bears_in_frame': int(bear_counts_array.max()) if len(bear_counts_array) > 0 else 0,
+            'avg_bears_per_frame': float(bear_counts_array.mean()) if len(bear_counts_array) > 0 else 0,
+            'total_detections': int(bear_counts_array.sum()),
+            'unique_bears_tracked': len(unique_track_ids),
+            'track_ids': sorted(list(unique_track_ids)),
+            'frame_data': frame_data
+        }
+
+        if verbose:
+            print(f"  ✓ Processed {len(frame_data)} frames in {duration:.1f}s")
+            print(f"  🐻 Unique bears: {stats['unique_bears_tracked']}")
+            print(f"  📊 Max in frame: {stats['max_bears_in_frame']}")
+
+        return stats
+
+    def batch_track_bears(self, video_paths=None, video_dir=None, pattern='*.mkv',
+                         conf=0.25, frame_skip=30, classes=21, tracker='bytetrack',
+                         verbose=False):
+        """
+        Track bears in multiple videos (batch processing with ByteTrack)
+        
+        Args:
+            video_paths: List of video file paths
+            video_dir: Directory containing videos (alternative to video_paths)
+            pattern: Glob pattern for videos in video_dir (default: *.mkv)
+            conf: Confidence threshold
+            frame_skip: Process every Nth frame
+            classes: Class ID(s) to detect
+            tracker: Tracker name (default: bytetrack)
+            verbose: Print detailed info for each video
+            
+        Returns:
+            dict with batch results
+        """
+        # Get video list
+        if video_paths is None:
+            if video_dir is None:
+                raise ValueError("Either video_paths or video_dir must be provided")
+            
+            video_dir = Path(video_dir)
+            if not video_dir.is_absolute():
+                video_dir = RAW_DATA_DIR / video_dir
+            
+            # Support multiple video formats
+            if pattern == '*':
+                video_paths = []
+                for ext in ['*.mkv', '*.mp4', '*.avi', '*.mov']:
+                    video_paths.extend(video_dir.glob(ext))
+            else:
+                video_paths = list(video_dir.glob(pattern))
+            
+            if not video_paths:
+                raise ValueError(f"No videos found in {video_dir} matching '{pattern}'")
+        
+        print(f"\n{'='*70}")
+        print(f"BATCH BEAR TRACKING: {len(video_paths)} videos with {tracker}")
+        print(f"{'='*70}\n")
+
+        # Process each video with tracking
+        results = []
+        for video_path in video_paths:
+            try:
+                stats = self.track_bears_in_video(
+                    video_path=video_path,
+                    conf=conf,
+                    frame_skip=frame_skip,
+                    classes=classes,
+                    tracker=tracker,
+                    verbose=verbose
+                )
+                results.append(stats)
+                print(f"  ✓ {stats['video_name']}: {stats['unique_bears_tracked']} bears (tracked)")
+            except Exception as e:
+                print(f"  ✗ {Path(video_path).name}: Error - {e}")
+                results.append({
+                    'video_name': Path(video_path).name,
+                    'error': str(e),
+                    'status': 'failed'
+                })
+        
+        # Print summary
+        successful = [r for r in results if 'error' not in r]
+        print(f"\n{'='*70}")
+        print(f"SUMMARY: Processed {len(successful)}/{len(video_paths)} videos successfully")
+        print(f"{'='*70}")
+        
+        return {
+            'videos': results,
+            'total': len(video_paths),
+            'successful': len(successful),
+            'failed': len(video_paths) - len(successful)
+        }
+
     def batch_count_bears(self, video_paths=None, video_dir=None, pattern='*.mkv',
                          conf=0.25, frame_skip=30, classes=21, ground_truth=None,
                          save_results=True):

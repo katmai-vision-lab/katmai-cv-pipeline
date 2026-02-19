@@ -69,6 +69,25 @@ python -m src.detection.bear_count \
     --pattern "*.mkv"
 ```
 
+```
+python -m src.detection.bear_count \
+    --video-dir bears \
+    --model models/trained/bear_detector9/weights/best.pt \
+    --pattern "*.mkv" \
+    --classes 0 \
+    --conf 0.15
+```
+
+```
+python -m src.detection.bear_count \
+    --video-dir bears \
+    --pattern "*.mp4" \
+    --model models/trained/bear_detector9/weights/best.pt \
+    --classes 0 \
+    --conf 0.15 \
+    --tracking \
+    --verbose
+```
 ## Useful Link
 SharePoint:
 https://uwnetid.sharepoint.com/sites/katmai-vision-lab/Shared%20Documents/Forms/AllItems.aspx
