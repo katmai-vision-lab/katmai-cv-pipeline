@@ -38,15 +38,15 @@ def split_dataset(input_dir, train_ratio=0.8, val_ratio=0.2, seed=42):
     label_files = list(labels_dir.rglob('*.txt'))
     label_dict = {}
     for label_file in label_files:
-        # .stem = 只取文件名，不含路径、不含扩展名，如 "frame00000_t0.00s"
+        
         label_dict[label_file.stem] = label_file
     
     print(f"Found {len(label_files)} label files")
     
-    # Match by filename only (不管在哪个子文件夹，只比文件名)
+    # Match by filename only 
     valid_files = []
     for img_file in image_files:
-        img_stem = img_file.stem  # 只取文件名，如 "frame00000_t0.00s" 或 "2025-09-17..._frame00000_t0.00s"
+        img_stem = img_file.stem  
         
         if img_stem in label_dict:
             valid_files.append((img_file, label_dict[img_stem]))
