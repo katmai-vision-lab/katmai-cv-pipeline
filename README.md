@@ -26,6 +26,18 @@ git checkout -b dev-xxx origin/main
 git pull origin main
 git push origin dev-xxx
 ```
+### Split video
+```
+python -m src.preprocessing.split_dataset \
+    --input data/annotation/bears
+```
+### Training process
+```
+python -m src.detection.train \
+    --data data/annotation/bears/bear.yaml \
+    --config configs/train_config.yaml
+```
+
 ## Run Pipeline
 Quick test with pretrained model.
 ```bash
@@ -72,19 +84,19 @@ python -m src.detection.bear_count \
 ```
 python -m src.detection.bear_count \
     --video-dir bears \
-    --model models/trained/bear_detector9/weights/best.pt \
+    --model models/trained/bear_detector_v2/weights/best.pt \
     --pattern "*.mkv" \
     --classes 0 \
-    --conf 0.15
+    --conf 0.49
 ```
 
 ```
 python -m src.detection.bear_count \
     --video-dir bears \
     --pattern "*.mp4" \
-    --model models/trained/bear_detector9/weights/best.pt \
+    --model models/trained/bear_detector_v2/weights/best.pt \
     --classes 0 \
-    --conf 0.15 \
+    --conf 0.49 \
     --tracking \
     --verbose
 ```

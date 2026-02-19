@@ -71,7 +71,8 @@ def main():
             frame_skip=args.frame_skip,
             classes=args.classes,
             tracker=args.tracker,
-            verbose=args.verbose
+            verbose=args.verbose,
+            save_results=not args.no_save
         )
         return 0 if results['failed'] == 0 else 1
     

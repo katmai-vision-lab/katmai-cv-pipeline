@@ -344,7 +344,7 @@ class BearDetector:
 
     def batch_track_bears(self, video_paths=None, video_dir=None, pattern='*.mkv',
                          conf=0.25, frame_skip=30, classes=21, tracker='bytetrack',
-                         verbose=False):
+                         verbose=False, save_results=True):
         """
         Track bears in multiple videos (batch processing with ByteTrack)
         
@@ -412,13 +412,42 @@ class BearDetector:
         print(f"\n{'='*70}")
         print(f"SUMMARY: Processed {len(successful)}/{len(video_paths)} videos successfully")
         print(f"{'='*70}")
-        
-        return {
+
+        batch_results = {
             'videos': results,
             'total': len(video_paths),
             'successful': len(successful),
             'failed': len(video_paths) - len(successful)
         }
+
+        if save_results:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_dir = PREDICTIONS_DIR / 'batch_counting' / f'batch_{timestamp}'
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            json_path = output_dir / 'batch_results.json'
+            with open(json_path, 'w') as f:
+                json.dump(make_json_safe(batch_results), f, indent=2)
+
+            if successful:
+                df = pd.DataFrame([{
+                    'video_name': v['video_name'],
+                    'unique_bears': v['unique_bears_tracked'],
+                    'max_bears_in_frame': v['max_bears_in_frame'],
+                    'avg_bears_per_frame': v['avg_bears_per_frame'],
+                    'total_detections': v['total_detections'],
+                    'frames_analyzed': v['frames_analyzed'],
+                    'processing_time_sec': v['processing_time'],
+                } for v in successful])
+                csv_path = output_dir / 'batch_summary.csv'
+                df.to_csv(csv_path, index=False)
+
+            print(f"\n📁 Results saved to: {output_dir}")
+            print(f"  - {json_path.name}")
+            if successful:
+                print(f"  - {csv_path.name}")
+
+        return batch_results
 
     def batch_count_bears(self, video_paths=None, video_dir=None, pattern='*.mkv',
                          conf=0.25, frame_skip=30, classes=21, ground_truth=None,
