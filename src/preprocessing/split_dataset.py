@@ -37,14 +37,32 @@ def split_dataset(input_dir, train_ratio=0.8, val_ratio=0.2, seed=42):
     # Check for corresponding labels
     valid_files = []
     for img_file in image_files:
-        # Get relative path from images_dir to maintain folder structure
+        # Get relative path from images_dir
         rel_path = img_file.relative_to(images_dir)
+        
+        # Try strategy 1: Same structure (labels/folder/subfolder/file.txt)
         label_file = labels_dir / rel_path.parent / f"{img_file.stem}.txt"
         
         if label_file.exists():
-            valid_files.append(img_file)
+            valid_files.append((img_file, label_file))
         else:
-            print(f"⚠️  Warning: No label file for {rel_path}")
+            # Try strategy 2: Flattened structure with parent folder name in filename
+            # e.g., images/cat1/video1/frame001.jpg -> labels/cat1/video1_frame001.txt
+            if rel_path.parent != Path('.'):
+                parts = list(rel_path.parent.parts)
+                if len(parts) >= 2:
+                    # Try: labels/cat1/video1_frame001.txt
+                    flattened_name = f"{parts[-1]}_{img_file.stem}.txt"
+                    label_file = labels_dir / parts[0] / flattened_name
+                    
+                    if label_file.exists():
+                        valid_files.append((img_file, label_file))
+                    else:
+                        print(f"⚠️  Warning: No label file for {rel_path}")
+                else:
+                    print(f"⚠️  Warning: No label file for {rel_path}")
+            else:
+                print(f"⚠️  Warning: No label file for {rel_path}")
     
     print(f"Found {len(valid_files)} image-label pairs")
     
@@ -71,18 +89,12 @@ def split_dataset(input_dir, train_ratio=0.8, val_ratio=0.2, seed=42):
     
     # Move files (flatten structure - all files go directly into train/val)
     print("\nMoving files...")
-    for img_file in train_files:
-        rel_path = img_file.relative_to(images_dir)
-        label_file = labels_dir / rel_path.parent / f"{img_file.stem}.txt"
-        
+    for img_file, label_file in train_files:
         # Move to train (flatten - use only filename)
         shutil.move(str(img_file), str(train_img_dir / img_file.name))
         shutil.move(str(label_file), str(train_lbl_dir / label_file.name))
     
-    for img_file in val_files:
-        rel_path = img_file.relative_to(images_dir)
-        label_file = labels_dir / rel_path.parent / f"{img_file.stem}.txt"
-        
+    for img_file, label_file in val_files:
         # Move to val (flatten - use only filename)
         shutil.move(str(img_file), str(val_img_dir / img_file.name))
         shutil.move(str(label_file), str(val_lbl_dir / label_file.name))
