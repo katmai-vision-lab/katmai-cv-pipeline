@@ -97,8 +97,9 @@ class BearDetector:
             **kwargs
         )
 
-        # Update model path to trained weights
-        self.model_path = Path(project) / name / 'weights' / 'best.pt'
+        # Use actual save_dir: when name already exists, ultralytics saves to name2, name3, etc.
+        save_dir = Path(self.model.trainer.save_dir)
+        self.model_path = save_dir / 'weights' / 'best.pt'
         self.model = YOLO(str(self.model_path))
 
         print(f"\n✓ Training complete!")
@@ -299,14 +300,14 @@ class BearDetector:
 
         for frame_id, result in enumerate(results):
             boxes = result.boxes
-            num_bears = len(boxes)
-            
-            # Get track IDs
+
+            # Get track IDs first
             track_ids = []
             if boxes.id is not None:
                 track_ids = boxes.id.cpu().numpy().astype(int).tolist()
                 unique_track_ids.update(track_ids)
-            
+
+            num_bears = len(track_ids)  # count confirmed tracks, not raw boxes
             confidences = boxes.conf.cpu().numpy() if len(boxes) > 0 else []
 
             bear_counts_per_frame.append(num_bears)
