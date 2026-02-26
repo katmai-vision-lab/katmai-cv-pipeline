@@ -23,5 +23,8 @@ YOLOV8N_PATH = PRETRAINED_MODELS_DIR / 'yolov8n.pt'
 # Output directories
 PREDICTIONS_DIR = PROJECT_ROOT / 'predictions'
 
+# Tracker configurations
+TRACKERS_CONFIG_DIR = PROJECT_ROOT / 'configs' / 'trackers'
+
 # Default YOLO classes
 COCO_BEAR_CLASS = 21

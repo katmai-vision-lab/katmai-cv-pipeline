@@ -17,7 +17,7 @@ venv/
 
 # ignore raw data
 data/raw
-
+data/annotation
 # ignore prediction output
 predictions
 
