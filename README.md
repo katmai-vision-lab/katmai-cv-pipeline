@@ -78,25 +78,25 @@ Bear counting batch.
 ```bash
 python -m src.detection.bear_count \
     --video-dir bears \
-    --pattern "*.mkv"
+    --pattern "*.mp4"
 ```
 
 ```
 python -m src.detection.bear_count \
     --video-dir bears \
-    --model models/trained/bear_detector_v2/weights/best.pt \
-    --pattern "*.mkv" \
+    --model models/trained/bear_detector3/weights/best.pt \
+    --pattern "*.mp4" \
     --classes 0 \
-    --conf 0.49
+    --conf 0.5
 ```
 
 ```
-python -m src.detection.bear_count \
+python3 -m src.detection.bear_count \
     --video-dir bears \
     --pattern "*.mp4" \
-    --model models/trained/bear_detector_v2/weights/best.pt \
+    --model models/trained/bear_detector3/weights/best.pt \
     --classes 0 \
-    --conf 0.49 \
+    --conf 0.5 \
     --tracking \
     --verbose
 ```
