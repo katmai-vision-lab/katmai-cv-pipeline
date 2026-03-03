@@ -98,17 +98,6 @@ class MultiModelAnnotator:
 
         self.models = {}
         self.thresholds = {}
-        
-        # Model weights based on arena evaluation (341 test images)
-        # Formula: 45% precision + 30% recall + 25% IoU
-        # Results: Grounding DINO (89.3% P, 99.8% R, 97.1% IoU)
-        #          MegaDetector (65.6% P, 84.4% R, 91.7% IoU)
-        #          DETR (35.4% P, 74.7% R, 87.5% IoU)
-        self.model_weights = {
-            'gdino': 0.406,      # Best overall: high precision + near-perfect recall
-            'megadet': 0.335,    # Good balance
-            'detr': 0.259,       # Lowest precision, high false positive rate
-        }
 
         print("\n" + "="*60)
         print("初始化多模型标注系统")
@@ -247,11 +236,8 @@ class MultiModelAnnotator:
             num_agreeing_models = len(models_in_group)
 
             if num_agreeing_models >= min_agreement:
-                # Consensus reached - use weighted score (model_weight * confidence)
-                def weighted_score(d: Detection) -> float:
-                    return self.model_weights.get(d.model, 0.33) * d.score
-                
-                best_detection = max(group, key=weighted_score)
+                # Consensus reached - use the detection with highest confidence
+                best_detection = max(group, key=lambda d: d.score)
                 consensus_detections.append(best_detection)
             else:
                 # Not enough models agree

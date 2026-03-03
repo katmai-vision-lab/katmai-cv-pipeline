@@ -26,6 +26,18 @@ git checkout -b dev-xxx origin/main
 git pull origin main
 git push origin dev-xxx
 ```
+### Split video
+```
+python -m src.preprocessing.split_dataset \
+    --input data/annotation/bears
+```
+### Training process
+```
+python -m src.detection.train \
+    --data data/annotation/bears/bear.yaml \
+    --config configs/train_config.yaml
+```
+
 ## Run Pipeline
 Quick test with pretrained model.
 ```bash
@@ -54,14 +66,40 @@ Use your fine-tuned model.
 python -m src.main \
     --mode full \
     --video "bears/2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
-    --model models/trained/pipeline_trained_model/weights/best.pt \
+    --model models/trained/bear_detector/weights/best.pt \
     --skip-train \
-    --epochs 3 \
-    --conf 0.12 \
+    --classes 0 \
+    --conf 0.25 \
     --ground-truth 5
 ```
+```
 
+Bear counting batch.
+```bash
+python -m src.detection.bear_count \
+    --video-dir bears \
+    --pattern "*.mp4"
+```
+
+```
+python -m src.detection.bear_count \
+    --video-dir bears \
+    --model models/trained/bear_detector3/weights/best.pt \
+    --pattern "*.mp4" \
+    --classes 0 \
+    --conf 0.5
+```
+
+```
+python3 -m src.detection.bear_count \
+    --video-dir bears \
+    --pattern "*.mp4" \
+    --model models/trained/bear_detector3/weights/best.pt \
+    --classes 0 \
+    --conf 0.5 \
+    --tracking \
+    --verbose
+```
 ## Useful Link
 SharePoint:
 https://uwnetid.sharepoint.com/sites/katmai-vision-lab/Shared%20Documents/Forms/AllItems.aspx
-

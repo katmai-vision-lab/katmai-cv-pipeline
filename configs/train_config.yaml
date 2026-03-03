@@ -1,0 +1,44 @@
+# YOLOv8 Training Configuration
+
+epochs: 5              
+batch: 16               
+imgsz: 640              
+
+
+lr0: 0.01               
+lrf: 0.01              
+momentum: 0.937         
+weight_decay: 0.0005    
+
+
+
+hsv_h: 0.015            
+hsv_s: 0.7             
+hsv_v: 0.4             
+
+
+degrees: 0.0           
+translate: 0.1         
+scale: 0.5             
+shear: 0.0            
+perspective: 0.0      
+flipud: 0.0            
+fliplr: 0.5           
+
+# Mosaic/MixUp增强
+mosaic: 1.0             
+mixup: 0.0              
+copy_paste: 0.0        
+
+
+patience: 50           
+save: true              
+save_period: -1        
+workers: 8            
+device: ''            
+verbose: true          
+seed: 0                 
+deterministic: true     
+optimizer: 'auto'      
+pretrained: true       
+amp: true               

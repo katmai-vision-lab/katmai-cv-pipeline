@@ -6,6 +6,7 @@ __pycache__/
 *.py[cod]
 .env
 venv/
+.pytest_cache/
 
 # IDE
 .vscode/
@@ -14,10 +15,11 @@ venv/
 # Claude Code
 .claude/
 
+# ignore raw data
 data/raw
-
+data/annotation
 # ignore prediction output
 predictions
 
-# ignore trained model
-models/trained
+# ignore model files
+models/
