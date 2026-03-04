@@ -1,32 +1,45 @@
 # Salmon Auto-Annotation System
 
-这是从熊自动标注系统改编的**三文鱼检测系统**。
+这是专为**跃出水面的三文鱼检测**优化的系统。
 
-## 主要差异
+## 系统架构
 
-### vs. 熊系统 (annotation-bear)
+### 3模型配置（最优推荐）
 
-| 特性 | 熊系统 | 三文鱼系统 |
+| 模型 | 版本 | 权重 | 专长 |
+|------|------|------|------|
+| **Grounding DINO** | base | 0.40 | 文本理解，通用目标检测 |
+| **OWL-ViT v2** | base-ensemble | 0.35 | 动作理解（"跳跃"、"跃出"） |
+| **Florence-2** | base | 0.25 | 复杂场景（水花、反光） |
+
+**min_agreement**: 2 (3个模型中至少2个同意)
+
+### vs. 熊系统 (annotation_bear)
+
+| 差异 | 熊系统 | 三文鱼系统 |
 |------|--------|------------|
-| 模型数量 | 3个 (GDINO + DETR + MegaDetector) | 2个 (GDINO + DETR) |
-| MegaDetector | ✅ 启用 | ❌ 禁用（为陆地动物训练） |
-| 默认prompt | "bear" | "salmon" |
-| 模型权重 | gdino:0.406, detr:0.259, megadet:0.335 | gdino:0.61, detr:0.39 |
-| min_agreement | 2 (3个模型中2个) | 1 (2个模型中1个) |
+| 模型组合 | GDINO + DETR + MegaDetector | GDINO + OWL-ViT v2 + Florence-2 |
+| MegaDetector | ✅ 启用（陆地动物专用） | ❌ 禁用（不适合水生生物） |
+| DETR | ✅ 启用 | ❌ 禁用（精度低35.4%） |
+| 默认prompt | "bear" | "salmon" / "salmon jumping out of water" |
+| 模型权重 | 0.406/0.335/0.259 | 0.40/0.35/0.25 |
+| 场景优化 | 陆地森林环境 | 水面跳跃场景 |
 
-### 为什么禁用MegaDetector？
+### 模型选择理由
 
-MegaDetector v5 专门为**陆地野生动物**（熊、鹿、狼等）训练，在以下场景表现很好：
-- 森林、草原等陆地环境
-- 红外相机陷阱图像
-- 四足动物形态
+#### 🚀 OWL-ViT v2 的优势
+- **CLIP架构**：擅长理解动作概念（"jumping"、"leaping"）
+- **Zero-shot能力**：无需预训练即可理解"salmon jumping"
+- **场景适应**：对提示词 "salmon jumping out of water" 响应好
 
-但对**水生生物**表现差：
-- 鱼类形态完全不同
-- 水面反光、水下环境干扰
-- 没有相关训练数据
+#### 🧠 Florence-2 的优势
+- **最新VLM** (2024发布)：视觉-语言多模态模型
+- **鲁棒性强**：对水花飞溅、水面反光等复杂场景更稳定
+- **泛化能力**：在各种光照、角度下表现一致
 
-因此在三文鱼系统中默认禁用，仅使用Grounding DINO和DETR。
+#### ❌ 为什么禁用MegaDetector和DETR？
+- **MegaDetector v5**: 专门为**陆地野生动物**（熊、鹿、狼）训练，对鱼类形态识别能力差
+- **DETR**: 在熊系统评估中精度仅35.4%，假阳性率高
 
 ## 使用方法
 
@@ -35,17 +48,17 @@ MegaDetector v5 专门为**陆地野生动物**（熊、鹿、狼等）训练，
 ```bash
 # 1. 提取视频帧
 python -m src.preprocessing.annotation_salmon.frame_extractor \
-  --input salmon_video.mp4 \
+  --input salmon_jumping_video.mp4 \
   --output data/frames/salmon/ \
-  --fps 0.2
+  --fps 0.5
 
-# 2. 自动标注
+# 2. 自动标注（3模型ensemble）
 python -m src.preprocessing.annotation_salmon.multi_model_annotator \
   --input data/frames/salmon/ \
   --output data/auto_labels_salmon/ \
   --review-queue data/review_queue_salmon/ \
-  --prompt "salmon" \
-  --min-agreement 1 \
+  --prompt "salmon jumping out of water" \
+  --min-agreement 2 \
   --auto-approve
 
 # 3. 可视化验证
@@ -61,43 +74,50 @@ python -m src.preprocessing.annotation_salmon.visualize_labels \
 如果你有标注好的三文鱼验证集：
 
 ```bash
-# 训练校准器
+# 训练校准器（使用3个模型）
 python -m src.preprocessing.annotation_salmon.train_calibration \
-  --images data/annotation/salmon/images/ \
-  --labels data/annotation/salmon/labels/ \
+  --images data/annotation/salmon/images/train/ \
+  --labels data/annotation/salmon/labels/train/ \
   --output models/calibrators_salmon.pkl \
-  --prompt "salmon" \
-  --use-megadet False
+  --prompt "salmon jumping out of water" \
+  --use-gdino \
+  --use-owlvit \
+  --use-florence2
 
 # 使用校准器标注
 python -m src.preprocessing.annotation_salmon.multi_model_annotator \
   --input data/frames/salmon/ \
   --output data/auto_labels_salmon/ \
-  --prompt "salmon" \
+  --prompt "salmon jumping out of water" \
   --auto-approve \
   --calibrator models/calibrators_salmon.pkl
 ```
 
 ## 提示词优化
 
-除了 "salmon"，你可以尝试更具体的提示：
+**推荐提示词（针对跳跃场景）**：
 
 ```bash
-# 通用三文鱼
---prompt "salmon"
-
-# 特定种类
---prompt "chinook salmon"
---prompt "sockeye salmon"  
---prompt "coho salmon"
-
-# 上下文线索
---prompt "salmon fish in water"
+# 最优推荐（默认）
 --prompt "jumping salmon"
 
-# 多目标检测
---prompt "salmon. bear."  # 同时检测三文鱼和熊
+# 备选动作词
+--prompt "leaping salmon"
+--prompt "salmon in mid-air"
+
+# 种类特定
+--prompt "jumping chinook salmon"
+--prompt "leaping sockeye salmon"
+
+# 简洁通用
+--prompt "salmon"
 ```
+
+**不推荐**：
+- ❌ "salmon jumping out of water" (包含"water"会被Florence-2误检为大框)
+- ❌ "salmon swimming" (水下场景，模型优化不匹配)
+- ❌ "dead salmon" (非动态场景)
+- ❌ "salmon in bear mouth" (复合场景，用熊系统更好)
 
 ## 性能预期
 

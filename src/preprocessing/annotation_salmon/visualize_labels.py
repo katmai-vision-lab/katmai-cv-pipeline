@@ -24,13 +24,13 @@ def draw_yolo_boxes(image_path: str, label_path: str, output_path: str = None, c
         image_path: Path to the image
         label_path: Path to the YOLO label file
         output_path: Path to save the output image (optional)
-        class_names: List of class names (default: ["bear"])
+        class_names: List of class names (default: ["salmon"])
 
     Returns:
         Image with boxes drawn
     """
     if class_names is None:
-        class_names = ["bear"]
+        class_names = ["salmon"]
 
     image_path = Path(image_path)
     label_path = Path(label_path)

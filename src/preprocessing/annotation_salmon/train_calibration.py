@@ -25,6 +25,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.preprocessing.annotation_salmon.auto_annotator_gdino import GroundingDINOAnnotator
 from src.preprocessing.annotation_salmon.auto_annotator_megadet import MegaDetectorAnnotator
 from src.preprocessing.annotation_salmon.auto_annotator_detr import DETRAnnotator
+from src.preprocessing.annotation_salmon.auto_annotator_owlvit import OWLViTAnnotator
+from src.preprocessing.annotation_salmon.auto_annotator_florence2 import Florence2Annotator
 from src.preprocessing.annotation_salmon.probability_calibrator import (
     ProbabilityCalibrator,
     CalibrationData,
@@ -146,30 +148,37 @@ def train_calibration(
     images_dir: Path,
     labels_dir: Path,
     output_path: Path,
-    prompt: str = "bear",
+    prompt: str = "salmon",
     iou_threshold: float = 0.5,
     use_gdino: bool = True,
-    use_megadet: bool = True,
-    use_detr: bool = True,
+    use_owlvit: bool = True,
+    use_florence2: bool = True,
+    use_megadet: bool = False,
+    use_detr: bool = False,
     device: str = "cuda"
 ):
     """
-    Train calibration curves for each model using validation set.
+    Train calibration curves for jumping salmon detection models.
     
     Args:
         images_dir: Directory containing validation images
         labels_dir: Directory containing ground truth YOLO labels
         output_path: Where to save trained calibrator
-        prompt: Detection prompt for Grounding DINO
+        prompt: Detection prompt (e.g., "salmon jumping out of water")
         iou_threshold: IoU threshold for matching detections to GT
-        use_gdino/use_megadet/use_detr: Which models to calibrate
+        use_gdino: Include Grounding DINO (default: True)
+        use_owlvit: Include OWL-ViT v2 (default: True)
+        use_florence2: Include Florence-2 (default: True)  
+        use_megadet: Include MegaDetector (default: False - not for fish)
+        use_detr: Include DETR (default: False - low precision)
         device: cuda or cpu
     """
     print("=" * 80)
-    print("PROBABILITY CALIBRATION TRAINING")
+    print("三文鱼跳跃检测 - 概率校准训练")
     print("=" * 80)
     print(f"Images: {images_dir}")
     print(f"Labels: {labels_dir}")
+    print(f"Prompt: {prompt}")
     print(f"IoU threshold: {iou_threshold}")
     print(f"Device: {device}")
     print()
@@ -179,14 +188,28 @@ def train_calibration(
     calibration_data: Dict[str, CalibrationData] = {}
     
     if use_gdino:
-        print("Loading Grounding DINO...")
+        print("Loading Grounding DINO Base...")
         models['gdino'] = GroundingDINOAnnotator(
-            model_size='base',
-            box_threshold=0.25,
-            text_threshold=0.25,
+            model_id='IDEA-Research/grounding-dino-base',
             device=device
         )
         calibration_data['gdino'] = CalibrationData('gdino')
+    
+    if use_owlvit:
+        print("Loading OWL-ViT v2 Base Ensemble...")
+        models['owlvit'] = OWLViTAnnotator(
+            model_id='google/owlv2-base-patch16-ensemble',
+            device=device
+        )
+        calibration_data['owlvit'] = CalibrationData('owlvit')
+    
+    if use_florence2:
+        print("Loading Florence-2 Base...")
+        models['florence2'] = Florence2Annotator(
+            model_id='microsoft/Florence-2-base',
+            device=device
+        )
+        calibration_data['florence2'] = CalibrationData('florence2')
     
     if use_megadet:
         print("Loading MegaDetector v5...")
@@ -236,11 +259,30 @@ def train_calibration(
         # Run each model
         for model_name, model in models.items():
             if model_name == 'gdino':
-                detections = model.annotate(img_path, prompt)
+                # Grounding DINO returns dict with 'box' and 'score'
+                detections_raw = model.detect(img, prompt, box_threshold=0.25, text_threshold=0.25)
+                detections = [(d['box'][0], d['box'][1], d['box'][2], d['box'][3], d['score']) 
+                             for d in detections_raw]
+            elif model_name == 'owlvit':
+                # OWL-ViT returns dict with 'box' and 'score'
+                detections_raw = model.detect(img, [prompt], threshold=0.1)
+                detections = [(d['box'][0], d['box'][1], d['box'][2], d['box'][3], d['score']) 
+                             for d in detections_raw]
+            elif model_name == 'florence2':
+                # Florence-2 returns dict with 'box' and 'score'
+                detections_raw = model.detect(img, prompt, threshold=0.3)
+                detections = [(d['box'][0], d['box'][1], d['box'][2], d['box'][3], d['score']) 
+                             for d in detections_raw]
             elif model_name == 'megadet':
-                detections = model.annotate(img_path)
+                # MegaDetector custom format
+                detections_raw = model.detect(img, threshold=0.3)
+                detections = [(d['box'][0], d['box'][1], d['box'][2], d['box'][3], d['score']) 
+                             for d in detections_raw]
             elif model_name == 'detr':
-                detections = model.annotate(img_path, img.width, img.height)
+                # DETR custom format
+                detections_raw = model.detect(img, threshold=0.5)
+                detections = [(d['box'][0], d['box'][1], d['box'][2], d['box'][3], d['score']) 
+                             for d in detections_raw]
             else:
                 detections = []
             
@@ -329,8 +371,8 @@ def main():
     parser.add_argument(
         "--prompt",
         type=str,
-        default="salmon",
-        help="Detection prompt for Grounding DINO (default: salmon)"
+        default="jumping salmon",
+        help="Detection prompt for Grounding DINO (default: jumping salmon)"
     )
     parser.add_argument(
         "--iou-threshold",
@@ -347,21 +389,33 @@ def main():
     )
     parser.add_argument(
         "--use-gdino",
-        type=bool,
+        action="store_true",
         default=True,
         help="Include Grounding DINO (default: True)"
     )
     parser.add_argument(
+        "--use-owlvit",
+        action="store_true",
+        default=True,
+        help="Include OWL-ViT v2 (default: True)"
+    )
+    parser.add_argument(
+        "--use-florence2",
+        action="store_true",
+        default=True,
+        help="Include Florence-2 (default: True)"
+    )
+    parser.add_argument(
         "--use-megadet",
-        type=bool,
+        action="store_true",
         default=False,
         help="Include MegaDetector v5 (default: False - not suitable for fish)"
     )
     parser.add_argument(
         "--use-detr",
-        type=bool,
-        default=True,
-        help="Include DETR (default: True)"
+        action="store_true",
+        default=False,
+        help="Include DETR (default: False - low precision)"
     )
     
     args = parser.parse_args()
@@ -383,6 +437,8 @@ def main():
         prompt=args.prompt,
         iou_threshold=args.iou_threshold,
         use_gdino=args.use_gdino,
+        use_owlvit=args.use_owlvit,
+        use_florence2=args.use_florence2,
         use_megadet=args.use_megadet,
         use_detr=args.use_detr,
         device=args.device

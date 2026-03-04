@@ -7,7 +7,7 @@
 | 系统 | 目录 | 目标 | 模型数量 | 状态 |
 |------|------|------|----------|------|
 | 🐻 **熊系统** | `annotation_bear/` | 棕熊检测 | 3个 | ✅ 生产级 |
-| 🐟 **三文鱼系统** | `annotation_salmon/` | 三文鱼检测 | 2个 | 🧪 实验性 |
+| 🐟 **三文鱼系统** | `annotation_salmon/` | 跃出水面的三文鱼 | 3个 | 🧪 实验性 |
 
 ## 熊系统 (`annotation_bear/`)
 
@@ -41,29 +41,33 @@ python -m src.preprocessing.annotation_bear.multi_model_annotator \
 ## 三文鱼系统 (`annotation_salmon/`)
 
 ### 特点
-- **2个模型共识**: Grounding DINO + DETR（禁用MegaDetector）
-- **快速改编**: 从熊系统修改而来
-- **优化提示词**: 默认prompt为"salmon"
-- **轻量级**: 更快的处理速度
+- **3个模型共识**: Grounding DINO + OWL-ViT v2 + Florence-2
+- **场景优化**: 专为"跃出水面的三文鱼"设计
+- **动作理解**: OWL-ViT v2擅长识别"跳跃"等动作
+- **复杂场景**: Florence-2对水花、反光鲁棒
 
-### 为什么不用MegaDetector？
-MegaDetector v5专为**陆地野生动物**训练（熊、鹿、狼等），对鱼类：
-- ❌ 形态差异大（四足动物 vs 鱼类）
-- ❌ 环境不同（森林 vs 水域）
-- ❌ 无相关训练数据
+### 模型选择策略
+✅ **启用**:
+- Grounding DINO: 文本理解能力强
+- OWL-ViT v2: CLIP架构，理解动作概念("jumping")
+- Florence-2: 最新VLM(2024)，对复杂场景鲁棒
+
+❌ **禁用**:
+- MegaDetector v5: 仅为陆地动物训练（熊、鹿、狼）
+- DETR: 精度低(35.4%)，假阳性率高
 
 ### 使用场景
-- 河流/溪流中的三文鱼
-- 鱼类洄游监测
-- 水生生物检测（需调整prompt）
+- ✅ 三文鱼跳跃场景（洄游、跃瀑布）
+- ✅ 水面上的动态鱼类
+- ⚠️  水下游动场景（未优化）
 
 ### 快速使用
 ```bash
 python -m src.preprocessing.annotation_salmon.multi_model_annotator \
-  --input data/frames/salmon_video/ \
+  --input data/frames/salmon_jumping/ \
   --output data/auto_labels_salmon/ \
-  --prompt "salmon" \
-  --min-agreement 1 \
+  --prompt "salmon jumping out of water" \
+  --min-agreement 2 \
   --auto-approve
 ```
 
@@ -78,20 +82,23 @@ python -m src.preprocessing.annotation_salmon.multi_model_annotator \
 
 | 特性 | 熊系统 | 三文鱼系统 |
 |------|--------|------------|
-| **Grounding DINO** | ✅ base模型，0.25阈值 | ✅ base模型，0.25阈值 |
-| **DETR ResNet-101** | ✅ 0.5阈值 | ✅ 0.5阈值 |
-| **MegaDetector v5** | ✅ 0.3阈值 | ❌ 禁用 |
-| **模型权重** | gdino:0.406, detr:0.259, megadet:0.335 | gdino:0.61, detr:0.39 |
-| **默认min_agreement** | 2/3 | 1/2 |
+| **Grounding DINO** | ✅ base，阈值0.25 | ✅ base，阈值0.25 |
+| **DETR ResNet-101** | ✅ 阈值0.5 | ❌ 禁用 |
+| **MegaDetector v5** | ✅ 阈值0.3 | ❌ 禁用 |
+| **OWL-ViT v2** | ❌ 未使用 | ✅ ensemble，阈值0.3 |
+| **Florence-2** | ❌ 未使用 | ✅ base，阈值0.3 |
+| **模型权重** | gdino:0.406, detr:0.259, megadet:0.335 | gdino:0.40, owlvit:0.35, florence2:0.25 |
+| **默认min_agreement** | 2/3 | 2/3 |
 
 ### 性能特征
 
 | 维度 | 熊系统 | 三文鱼系统 |
 |------|--------|------------|
-| **召回率** | 高（99.8%验证） | 中等（预期略低） |
+| **召回率** | 高（99.8%验证） | 待测试 |
 | **精度** | 高（89.3%验证） | 待测试 |
-| **速度** | 中等（~4-5秒/图） | 快（~3秒/图） |
-| **GPU显存** | 6-8GB | 4-6GB |
+| **速度** | 中等（~4-5秒/图） | 中等（~4-5秒/图） |
+| **GPU显存** | 6-8GB | 7-9GB（Florence-2更大） |
+| **场景特化** | 陆地森林环境 | 水面跳跃场景 |
 | **生产就绪** | ✅ 是 | 🧪 实验阶段 |
 
 ---
@@ -101,14 +108,19 @@ python -m src.preprocessing.annotation_salmon.multi_model_annotator \
 ### 使用熊系统，如果你需要：
 - ✅ 检测陆地野生动物（熊、鹿、狼等）
 - ✅ 最高的检测质量和可靠性
-- ✅ 经过验证的生产系统
+- ✅ 经过验证的生产系统（89.3% P / 99.8% R）
 - ✅ 完整的概率校准支持
 
 ### 使用三文鱼系统，如果你需要：
-- ✅ 检测鱼类或水生生物
-- ✅ 更快的处理速度
-- ✅ 较低的GPU显存需求
-- ⚠️  可接受实验性质的系统
+- ✅ 检测**跃出水面的三文鱼**（鱼跃、跳瀑布）
+- ✅ 利用动作理解（OWL-ViT的CLIP架构）
+- ✅ 处理复杂水面场景（水花、反光）
+- ⚠️  可接受实验性系统（需实际数据验证）
+
+### ❌ 两个系统都不适合：
+- 水下游动的鱼类（模型未针对水下场景优化）
+- 静止鱼类或死鱼（无动作特征）
+- 多种混合场景（如"熊抓鱼"，需要自定义模型组合）
 
 ---
 
