@@ -7,11 +7,20 @@ This module implements a multi-model annotation system that:
 3. Routes disagreements to human review
 
 Usage:
+    # 带人工审核队列（默认）
     python -m src.preprocessing.multi_model_annotator \
         --input data/frames/video_name/ \
         --output data/consensus_labels/ \
         --review-queue data/review_queue/ \
         --prompt "bear"
+    
+    # 自动批准模式（用于训练数据生成，不需要人工审核）
+    python -m src.preprocessing.multi_model_annotator \
+        --input data/frames/video_name/ \
+        --output data/auto_labels/ \
+        --review-queue data/review_queue/ \
+        --prompt "bear" \
+        --auto-approve
 """
 
 import argparse
@@ -27,9 +36,9 @@ import gc
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.preprocessing.auto_annotator_gdino import GroundingDINOAnnotator
-from src.preprocessing.auto_annotator_megadet import MegaDetectorAnnotator
-from src.preprocessing.auto_annotator_detr import DETRAnnotator
+from src.preprocessing.annotation.auto_annotator_gdino import GroundingDINOAnnotator
+from src.preprocessing.annotation.auto_annotator_megadet import MegaDetectorAnnotator
+from src.preprocessing.annotation.auto_annotator_detr import DETRAnnotator
 
 
 @dataclass
@@ -357,6 +366,7 @@ def auto_annotate_multi_model(
     iou_threshold: float = 0.5,
     min_agreement: int = 2,
     limit: int = None,
+    auto_approve: bool = False,
 ):
     """
     使用多模型对图像进行标注，并通过一致性检查提高标注质量。
@@ -364,11 +374,12 @@ def auto_annotate_multi_model(
     Args:
         input_dir: 输入图像目录
         output_dir: 一致性标注结果输出目录
-        review_queue_dir: 需要人工审核的样本保存目录
+        review_queue_dir: 需要人工审核的样本保存目录（auto_approve=True时不使用）
         text_prompt: 检测目标文本提示
         iou_threshold: IoU阈值，用于判断检测框是否匹配
         min_agreement: 最少需要几个模型同意 (默认: 3个中2个)
         limit: 最大处理图像数量
+        auto_approve: 自动批准模式，只保存达成共识的检测，跳过人工审核（用于训练数据生成）
     """
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
@@ -380,9 +391,12 @@ def auto_annotate_multi_model(
 
     # 创建输出目录
     output_dir.mkdir(parents=True, exist_ok=True)
-    review_queue_dir.mkdir(parents=True, exist_ok=True)
-    (review_queue_dir / "images").mkdir(exist_ok=True)
-    (review_queue_dir / "detections").mkdir(exist_ok=True)
+    
+    # 只在非自动批准模式下创建review queue
+    if not auto_approve:
+        review_queue_dir.mkdir(parents=True, exist_ok=True)
+        (review_queue_dir / "images").mkdir(exist_ok=True)
+        (review_queue_dir / "detections").mkdir(exist_ok=True)
 
     # 初始化标注器
     annotator = MultiModelAnnotator()
@@ -404,11 +418,14 @@ def auto_annotate_multi_model(
     if limit:
         image_files = image_files[:limit]
 
+    mode = "自动批准模式 (训练数据生成)" if auto_approve else "共识检查模式 (含人工审核)"
     print(f"\nMulti-Model Auto Annotation with Consensus Checking")
     print(f"{'='*60}")
+    print(f"Mode: {mode}")
     print(f"Input: {input_dir}")
     print(f"Output: {output_dir}")
-    print(f"Review queue: {review_queue_dir}")
+    if not auto_approve:
+        print(f"Review queue: {review_queue_dir}")
     print(f"Text prompt: \"{text_prompt}\"")
     print(f"IoU threshold: {iou_threshold}")
     print(f"Min agreement: {min_agreement}/{len(annotator.models)} models")
@@ -443,27 +460,33 @@ def auto_annotate_multi_model(
             print(f"  {model_name}: {len(detections)} detection(s)")
 
         if requires_review:
-            print(f"  ⚠️  NEEDS REVIEW: {review_reason}")
-            stats["needs_review"] += 1
+            if auto_approve:
+                # 自动批准模式：忽略需要审核的，只保存有共识的
+                print(f"  ⚠️ Skipped (no consensus): {review_reason}")
+                stats["needs_review"] += 1
+            else:
+                # 人工审核模式：保存到review queue
+                print(f"  ⚠️  NEEDS REVIEW: {review_reason}")
+                stats["needs_review"] += 1
 
-            # Save to review queue
-            review_data = {
-                "image_path": str(image_path),
-                "text_prompt": text_prompt,
-                "detections_by_model": {
-                    model: [asdict(d) for d in dets]
-                    for model, dets in detections_by_model.items()
-                },
-                "review_reason": review_reason,
-            }
+                # Save to review queue
+                review_data = {
+                    "image_path": str(image_path),
+                    "text_prompt": text_prompt,
+                    "detections_by_model": {
+                        model: [asdict(d) for d in dets]
+                        for model, dets in detections_by_model.items()
+                    },
+                    "review_reason": review_reason,
+                }
 
-            review_file = review_queue_dir / "detections" / f"{image_path.stem}.json"
-            with open(review_file, "w") as f:
-                json.dump(review_data, f, indent=2, default=lambda o: float(o) if hasattr(o, 'item') else str(o))
+                review_file = review_queue_dir / "detections" / f"{image_path.stem}.json"
+                with open(review_file, "w") as f:
+                    json.dump(review_data, f, indent=2, default=lambda o: float(o) if hasattr(o, 'item') else str(o))
 
-            # Copy image to review queue
-            import shutil
-            shutil.copy(image_path, review_queue_dir / "images" / image_path.name)
+                # Copy image to review queue
+                import shutil
+                shutil.copy(image_path, review_queue_dir / "images" / image_path.name)
         else:
             print(f"  ✓ Consensus: {len(consensus_detections)} detection(s)")
             stats["consensus"] += 1
@@ -485,10 +508,14 @@ def auto_annotate_multi_model(
     print(f"{'='*60}")
     print(f"Total images: {stats['total']}")
     print(f"Consensus reached: {stats['consensus']} ({stats['consensus']/stats['total']*100:.1f}%)")
-    print(f"Needs review: {stats['needs_review']} ({stats['needs_review']/stats['total']*100:.1f}%)")
+    if auto_approve:
+        print(f"Skipped (no consensus): {stats['needs_review']} ({stats['needs_review']/stats['total']*100:.1f}%)")
+    else:
+        print(f"Needs review: {stats['needs_review']} ({stats['needs_review']/stats['total']*100:.1f}%)")
     print(f"Total consensus detections: {stats['total_detections']}")
     print(f"\nLabels saved to: {output_dir}")
-    print(f"Review queue saved to: {review_queue_dir}")
+    if not auto_approve:
+        print(f"Review queue saved to: {review_queue_dir}")
     print(f"{'='*60}")
 
 
@@ -534,6 +561,11 @@ def main():
         default=None,
         help="Max number of images to process (default: all)"
     )
+    parser.add_argument(
+        "--auto-approve",
+        action="store_true",
+        help="自动批准模式：只保存达成共识的检测，跳过人工审核（用于生成训练数据）"
+    )
     args = parser.parse_args()
 
     auto_annotate_multi_model(
@@ -544,6 +576,7 @@ def main():
         iou_threshold=args.iou_threshold,
         min_agreement=args.min_agreement,
         limit=args.limit,
+        auto_approve=args.auto_approve,
     )
 
 

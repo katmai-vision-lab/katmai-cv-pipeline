@@ -15,7 +15,15 @@ matplotlib>=3.7.0
 tqdm>=4.65.0
 pyyaml>=6.0
 
-# Auto-annotation (Grounding DINO)
-transformers>=4.30.0
-huggingface_hub>=0.20.0
+# Auto-annotation - Multi-model consensus system
+# CRITICAL: transformers 5.x has breaking changes - must use 4.47.1
+transformers==4.47.1
+huggingface_hub==0.36.2
 safetensors>=0.4.0
+
+# Model dependencies
+timm>=0.9.0                    # Required for DETR backbone
+omegaconf>=2.3.0               # Required for MegaDetector
+pytorch-lightning>=2.0.0       # Required for MegaDetector
+lightning>=2.0.0               # Required for MegaDetector
+PytorchWildlife>=1.0.0         # Required for MegaDetector v5
