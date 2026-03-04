@@ -12,6 +12,45 @@ More information: https://github.com/katmai-vision-lab
 
 The pipeline includes an advanced multi-model annotation system that combines **Grounding DINO**, **DETR**, and **MegaDetector v5** to automatically generate high-quality training labels.
 
+### System Requirements
+- **GPU**: NVIDIA GPU with CUDA support (recommended 8GB+ VRAM)
+- **CUDA**: 12.x (tested with CUDA 12.8)
+- **Python**: 3.10
+- **RAM**: 16GB+ recommended
+- **Disk Space**: ~10GB for models and dependencies
+
+### Installation
+
+**1. Create Python environment**
+```bash
+conda create -n katmai python=3.10 -y
+conda activate katmai
+```
+
+**2. Install PyTorch with CUDA support**
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
+**3. Install core dependencies (IMPORTANT: Version-specific)**
+```bash
+# Critical: transformers version incompatibility issues
+pip install transformers==4.47.1
+pip install huggingface-hub==0.36.2
+
+# Model dependencies
+pip install timm omegaconf pytorch-lightning lightning PytorchWildlife
+
+# Other requirements
+pip install -r requirements.txt
+```
+
+**4. Verify installation**
+```bash
+python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
+python -c "import transformers; print('transformers version:', transformers.__version__)"
+```
+
 ### Features
 - **Model Arena Evaluation**: Scientifically validated model weights based on 341 test images
   - Grounding DINO: 0.406 weight (89.3% precision, 99.8% recall)
@@ -56,7 +95,7 @@ python -m src.preprocessing.annotation.multi_model_annotator \
 **Step 3: Visualize results (optional)**
 ```bash
 python -m src.preprocessing.annotation.visualize_labels \
-  --input data/frames/video_name/ \
+  --images data/frames/video_name/subfolder/ \
   --labels data/auto_labels/ \
   --output data/visualized/ \
   --limit 10
@@ -67,13 +106,49 @@ python -m src.preprocessing.annotation.visualize_labels \
 - One `.txt` file per image with format: `class_id x_center y_center width height`
 - Only includes detections with consensus (weighted agreement ≥ min_agreement)
 
-## Local Dev Setup
-Use conda to manage the virtual environment.
+### Important Notes
+
+⚠️ **Version Compatibility**
+- Must use `transformers==4.47.1` (v5.x has breaking changes)
+- `huggingface_hub` must be compatible with transformers 4.47.1
+- Do not upgrade transformers automatically
+
+⚠️ **First Run**
+- Models will be downloaded automatically (~5GB total)
+- Downloads cached in `~/.cache/huggingface/`
+- First run may take 10-15 minutes for model downloads
+
+⚠️ **Memory Management**
+- Models load sequentially to avoid GPU OOM
+- Expect ~6-8GB GPU memory usage
+- CPU mode available but slow (add `--device cpu`)
+
+⚠️ **File Paths**
+- Frame extractor creates subdirectory structure
+- Visualize tool requires the actual image subdirectory path
+- Example: `data/frames/video_name/video_name_frames/` not `data/frames/video_name/`
+
+### Troubleshooting
+
+**Issue: ModuleNotFoundError for timm/omegaconf/PytorchWildlife**
+```bash
+pip install timm omegaconf pytorch-lightning lightning PytorchWildlife
 ```
-conda create -n katmai python=3.10 -y
-conda activate katmai
-pip install -r requirements.txt
+
+**Issue: CUDA out of memory**
+- Reduce batch processing (models run sequentially by default)
+- Close other GPU applications
+- Use smaller model with `--use-detr False --use-megadet False`
+
+**Issue: transformers version conflict**
+```bash
+pip install transformers==4.47.1 --force-reinstall
 ```
+
+**Issue: No detections generated**
+- Check `--min-agreement` value (default: 2)
+- Try lowering threshold: `--min-agreement 1`
+- Verify input frames exist with correct path
 
 ## PR Process
 - Do the local development on your own dev branch, eg. dev-yourname

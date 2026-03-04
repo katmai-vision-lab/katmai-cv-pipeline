@@ -36,9 +36,9 @@ import gc
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.preprocessing.auto_annotator_gdino import GroundingDINOAnnotator
-from src.preprocessing.auto_annotator_megadet import MegaDetectorAnnotator
-from src.preprocessing.auto_annotator_detr import DETRAnnotator
+from src.preprocessing.annotation.auto_annotator_gdino import GroundingDINOAnnotator
+from src.preprocessing.annotation.auto_annotator_megadet import MegaDetectorAnnotator
+from src.preprocessing.annotation.auto_annotator_detr import DETRAnnotator
 
 
 @dataclass

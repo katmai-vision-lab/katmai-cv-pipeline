@@ -18,8 +18,22 @@ venv/
 # ignore raw data
 data/raw
 data/annotation
+data/frames
+data/auto_labels*
+data/visualized*
+data/review_queue*
+data/multi_model_labels
+
 # ignore prediction output
 predictions
 
 # ignore model files
 models/
+
+# ignore test/log files
+test_*.log
+test_*.txt
+arena_run.log
+results/
+runs/
+yolo*.pt
