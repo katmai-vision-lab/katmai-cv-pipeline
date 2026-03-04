@@ -106,6 +106,54 @@ python -m src.preprocessing.annotation.visualize_labels \
 - One `.txt` file per image with format: `class_id x_center y_center width height`
 - Only includes detections with consensus (weighted agreement ≥ min_agreement)
 
+### Advanced: Probability Calibration (Recommended)
+
+For improved accuracy, you can train probability calibrators that transform raw confidence scores into calibrated probabilities. This addresses the fact that different models have different confidence distributions (e.g., a 0.9 from DETR doesn't mean the same as 0.9 from Grounding DINO).
+
+**Benefits of calibration:**
+- More accurate combining of multi-model predictions
+- Better confidence estimates for each detection
+- Scientifically grounded probability scores
+- Reference: [sklearn probability calibration](https://scikit-learn.org/stable/modules/calibration.html)
+
+**Step 1: Train calibrators on validation set**
+```bash
+python -m src.preprocessing.annotation.train_calibration \
+  --images data/annotation/bears/images/ \
+  --labels data/annotation/bears/labels/ \
+  --output models/calibrators.pkl \
+  --prompt "bear" \
+  --iou-threshold 0.5
+```
+
+This will:
+- Run all 3 models on your validation images
+- Match detections to ground truth using IoU
+- Train isotonic regression calibrators
+- Report Expected Calibration Error (ECE) before/after
+
+**Step 2: Use calibrators during annotation**
+```bash
+python -m src.preprocessing.annotation.multi_model_annotator \
+  --input data/frames/video_name/ \
+  --output data/auto_labels/ \
+  --review-queue data/review_queue/ \
+  --prompt "bear" \
+  --min-agreement 2 \
+  --auto-approve \
+  --calibrator models/calibrators.pkl  # Add this line
+```
+
+**What happens:**
+- Raw confidence scores are transformed into calibrated probabilities
+- Model weights are applied to calibrated probabilities
+- Results in more accurate consensus detection selection
+
+**Note**: Training calibrators requires:
+- A validation set with ground truth labels (YOLO format)
+- At least 100+ samples per model (more is better)
+- ~30-60 minutes on GPU depending on dataset size
+
 ### Important Notes
 
 ⚠️ **Version Compatibility**

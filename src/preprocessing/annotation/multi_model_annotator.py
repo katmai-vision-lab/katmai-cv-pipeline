@@ -39,6 +39,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.preprocessing.annotation.auto_annotator_gdino import GroundingDINOAnnotator
 from src.preprocessing.annotation.auto_annotator_megadet import MegaDetectorAnnotator
 from src.preprocessing.annotation.auto_annotator_detr import DETRAnnotator
+from src.preprocessing.annotation.probability_calibrator import ProbabilityCalibrator
 
 
 @dataclass
@@ -88,6 +89,7 @@ class MultiModelAnnotator:
         detr_threshold: float = 0.5,
         megadet_threshold: float = 0.3,
         device: str = None,
+        calibrator_path: str = None,
     ):
         """
         Initialize multi-model annotator.
@@ -100,10 +102,21 @@ class MultiModelAnnotator:
             detr_threshold: Confidence threshold for DETR
             megadet_threshold: Confidence threshold for MegaDetector
             device: Device to run on (auto-detect if None)
+            calibrator_path: Path to trained calibrator .pkl file (optional)
         """
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
+        
+        # Load probability calibrator if provided
+        self.calibrator = None
+        if calibrator_path and Path(calibrator_path).exists():
+            print(f"\n加载概率校准器: {calibrator_path}")
+            self.calibrator = ProbabilityCalibrator.load(Path(calibrator_path))
+            print("✓ 校准器加载成功")
+        elif calibrator_path:
+            print(f"\n警告: 校准器文件未找到: {calibrator_path}")
+            print("将使用未校准的置信度分数")
 
         self.models = {}
         self.thresholds = {}
@@ -258,7 +271,11 @@ class MultiModelAnnotator:
             if num_agreeing_models >= min_agreement:
                 # Consensus reached - use weighted score (model_weight * confidence)
                 def weighted_score(d: Detection) -> float:
-                    return self.model_weights.get(d.model, 0.33) * d.score
+                    # Apply probability calibration if available
+                    score = d.score
+                    if self.calibrator:
+                        score = self.calibrator.calibrate(d.model, score)
+                    return self.model_weights.get(d.model, 0.33) * score
                 
                 best_detection = max(group, key=weighted_score)
                 consensus_detections.append(best_detection)
@@ -367,6 +384,7 @@ def auto_annotate_multi_model(
     min_agreement: int = 2,
     limit: int = None,
     auto_approve: bool = False,
+    calibrator_path: str = None,
 ):
     """
     使用多模型对图像进行标注，并通过一致性检查提高标注质量。
@@ -380,6 +398,7 @@ def auto_annotate_multi_model(
         min_agreement: 最少需要几个模型同意 (默认: 3个中2个)
         limit: 最大处理图像数量
         auto_approve: 自动批准模式，只保存达成共识的检测，跳过人工审核（用于训练数据生成）
+        calibrator_path: 校准器文件路径（可选，使用校准后的概率）
     """
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
@@ -399,7 +418,7 @@ def auto_annotate_multi_model(
         (review_queue_dir / "detections").mkdir(exist_ok=True)
 
     # 初始化标注器
-    annotator = MultiModelAnnotator()
+    annotator = MultiModelAnnotator(calibrator_path=calibrator_path)
 
     # Find all images
     image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -566,6 +585,12 @@ def main():
         action="store_true",
         help="自动批准模式：只保存达成共识的检测，跳过人工审核（用于生成训练数据）"
     )
+    parser.add_argument(
+        "--calibrator",
+        type=str,
+        default=None,
+        help="Path to trained probability calibrator .pkl file (optional)"
+    )
     args = parser.parse_args()
 
     auto_annotate_multi_model(
@@ -577,6 +602,7 @@ def main():
         min_agreement=args.min_agreement,
         limit=args.limit,
         auto_approve=args.auto_approve,
+        calibrator_path=args.calibrator,
     )
 
 
