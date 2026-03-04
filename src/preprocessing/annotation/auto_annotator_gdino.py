@@ -40,10 +40,9 @@ class GroundingDINOAnnotator:
         Initialize Grounding DINO model.
 
         Args:
-            model_id: HuggingFace model ID (tiny, base, or large)
+            model_id: HuggingFace model ID (only tiny and base are supported)
                 - "IDEA-Research/grounding-dino-tiny" (smallest, fastest)
-                - "IDEA-Research/grounding-dino-base" (balanced)
-                - "IDEA-Research/grounding-dino-large" (largest, most accurate)
+                - "IDEA-Research/grounding-dino-base" (default, best balance)
             device: Device to run on (auto-detect if None)
         """
         from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
@@ -328,9 +327,9 @@ def main():
     )
     parser.add_argument(
         "--model-size",
-        choices=["tiny", "base", "large"],
-        default="large",
-        help="Model size: 'large' (most accurate), 'base' (balanced), or 'tiny' (fastest). Default: large"
+        choices=["tiny", "base"],
+        default="base",
+        help="Model size: 'base' (default, best balance) or 'tiny' (fastest)"
     )
     parser.add_argument(
         "--limit", "-n",

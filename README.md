@@ -8,6 +8,65 @@ The system is designed to run on a consumer-grade laptop or desktop and ingest s
 
 More information: https://github.com/katmai-vision-lab
 
+## Auto-Annotation with Multi-Model Consensus
+
+The pipeline includes an advanced multi-model annotation system that combines **Grounding DINO**, **DETR**, and **MegaDetector v5** to automatically generate high-quality training labels.
+
+### Features
+- **Model Arena Evaluation**: Scientifically validated model weights based on 341 test images
+  - Grounding DINO: 0.406 weight (89.3% precision, 99.8% recall)
+  - MegaDetector v5: 0.335 weight (65.6% precision, 84.4% recall)
+  - DETR: 0.259 weight (35.4% precision, 74.7% recall)
+- **Weighted Consensus**: Uses model weights × confidence scores to select best detections
+- **Two Modes**: Human review mode or fully automatic mode for training data generation
+
+### Usage
+
+**Step 1: Extract frames from video**
+```bash
+python -m src.preprocessing.annotation.frame_extractor \
+  --input path/to/video.mp4 \
+  --output data/frames/video_name/ \
+  --fps 0.2
+```
+
+**Step 2: Generate training labels (auto-approve mode)**
+```bash
+# Fully automatic - only saves detections with model consensus (≥2/3 models agree)
+python -m src.preprocessing.annotation.multi_model_annotator \
+  --input data/frames/video_name/ \
+  --output data/auto_labels/ \
+  --review-queue data/review_queue/ \
+  --prompt "bear" \
+  --min-agreement 2 \
+  --auto-approve
+```
+
+**Alternative: Human review mode**
+```bash
+# Saves uncertain cases to review queue for manual verification
+python -m src.preprocessing.annotation.multi_model_annotator \
+  --input data/frames/video_name/ \
+  --output data/consensus_labels/ \
+  --review-queue data/review_queue/ \
+  --prompt "bear" \
+  --min-agreement 2
+```
+
+**Step 3: Visualize results (optional)**
+```bash
+python -m src.preprocessing.annotation.visualize_labels \
+  --input data/frames/video_name/ \
+  --labels data/auto_labels/ \
+  --output data/visualized/ \
+  --limit 10
+```
+
+### Output Format
+- YOLO format labels (ready for training)
+- One `.txt` file per image with format: `class_id x_center y_center width height`
+- Only includes detections with consensus (weighted agreement ≥ min_agreement)
+
 ## Local Dev Setup
 Use conda to manage the virtual environment.
 ```
