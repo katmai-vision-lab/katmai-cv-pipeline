@@ -24,7 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.detection.detector import BearDetector
 from src.detection.evaluate import evaluate_video, plot_evaluation
-from src.config import YOLOV8N_PATH, DATA_DIR, PREDICTIONS_DIR
+from src.config import TRAINED_BEAR_DETECTOR_PATH, DATA_DIR, PREDICTIONS_DIR
 
 
 def run_full_pipeline(video_path, data_yaml=None, model_path=None, epochs=3, 
@@ -37,7 +37,7 @@ def run_full_pipeline(video_path, data_yaml=None, model_path=None, epochs=3,
 
     # Step 1: Train
     # print("\n[1/3] Prepare model...")
-    # detector = BearDetector(model_path=YOLOV8N_PATH)
+    # detector = BearDetector(model_path=TRAINED_BEAR_DETECTOR_PATH)
     # if not skip_train:
     #     print("\nTrain model...")
     #     detector.train(
@@ -48,8 +48,8 @@ def run_full_pipeline(video_path, data_yaml=None, model_path=None, epochs=3,
     if skip_train:
         # Use existing model (pretrained or custom)
         if model_path is None:
-            model_path = YOLOV8N_PATH
-            print("\n⚠️  Using pretrained COCO model (yolov8n)")
+            model_path = TRAINED_BEAR_DETECTOR_PATH
+            print("\n⚠️  Using fine-tuned bear detector (bear_detector3)")
         else:
             print(f"\n⚠️  Using existing model: {model_path}")
 
@@ -61,7 +61,7 @@ def run_full_pipeline(video_path, data_yaml=None, model_path=None, epochs=3,
             raise ValueError("--data is required when training")
 
         print("\n[1/3] Training model...")
-        detector = BearDetector(model_path=model_path or YOLOV8N_PATH)
+        detector = BearDetector(model_path=model_path or TRAINED_BEAR_DETECTOR_PATH)
         detector.train(
             data_yaml=data_yaml,
             epochs=epochs,
@@ -109,7 +109,7 @@ def main():
                        help='Video file (required for predict/evaluate/full modes)')
     parser.add_argument('--data', type=str, default=None,
                        help='Dataset YAML (required for training)')
-    parser.add_argument('--model', type=str, default=str(YOLOV8N_PATH),
+    parser.add_argument('--model', type=str, default=str(TRAINED_BEAR_DETECTOR_PATH),
                        help='Model path')
     parser.add_argument('--epochs', type=int, default=3,
                        help='Training epochs')
@@ -136,7 +136,7 @@ def main():
         run_full_pipeline(
             video_path=args.video,
             data_yaml=args.data,
-            model_path=args.model if args.model != str(YOLOV8N_PATH) else None,
+            model_path=args.model if args.model != str(TRAINED_BEAR_DETECTOR_PATH) else None,
             epochs=args.epochs,
             conf=args.conf,
             ground_truth=args.ground_truth,

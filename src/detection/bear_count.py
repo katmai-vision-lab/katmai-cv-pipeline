@@ -7,7 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.detection.detector import BearDetector
-from src.config import YOLOV8N_PATH
+from src.config import TRAINED_BEAR_DETECTOR_PATH
 
 def main():
     parser = argparse.ArgumentParser(description='Batch Bear Counter')
@@ -23,7 +23,7 @@ def main():
                        help='File pattern for video-dir mode (default: *.mkv)')
     
     # Model options
-    parser.add_argument('--model', type=str, default=str(YOLOV8N_PATH),
+    parser.add_argument('--model', type=str, default=str(TRAINED_BEAR_DETECTOR_PATH),
                        help='Path to YOLO model')
     parser.add_argument('--conf', type=float, default=0.25,
                        help='Confidence threshold (default: 0.25)')
