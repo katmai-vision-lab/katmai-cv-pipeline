@@ -16,7 +16,7 @@ from src.config import (
     PRETRAINED_MODELS_DIR,
     TRAINED_MODELS_DIR,
     PREDICTIONS_DIR,
-    YOLOV8N_PATH
+    TRAINED_BEAR_DETECTOR_PATH
 )
 
 def make_json_safe(obj):
@@ -40,7 +40,7 @@ class BearDetector:
             model_path: Path to model file. If None, uses yolov8n pretrained
         """
         if model_path is None:
-            model_path = YOLOV8N_PATH
+            model_path = TRAINED_BEAR_DETECTOR_PATH
         else:
             model_path = Path(model_path)
 
