@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import json
 import time
+import subprocess
 from datetime import datetime
 import numpy as np
 from tqdm import tqdm
@@ -252,19 +253,19 @@ class BearDetector:
 
         return stats
 
-    def track_bears_in_video(self, video_path, conf=0.25, frame_skip=30, 
+    def track_bears_in_video(self, video_path, conf=0.25, frame_skip=30,
                             classes=21, tracker='bytetrack', verbose=True):
         """
         Track bears in a video using ByteTrack (returns unique bear count)
-        
+
         Args:
             video_path: Path to video file
             conf: Confidence threshold
-            frame_skip: Process every Nth frame  
+            frame_skip: Process every Nth frame
             classes: Class ID(s) to detect
             tracker: Tracker config ('bytetrack', 'botsort', or path to yaml)
             verbose: Print progress
-            
+
         Returns:
             dict with tracking statistics
         """
@@ -300,14 +301,12 @@ class BearDetector:
 
         for frame_id, result in enumerate(results):
             boxes = result.boxes
-
-            # Get track IDs first
             track_ids = []
             if boxes.id is not None:
                 track_ids = boxes.id.cpu().numpy().astype(int).tolist()
                 unique_track_ids.update(track_ids)
 
-            num_bears = len(track_ids)  # count confirmed tracks, not raw boxes
+            num_bears = len(track_ids)
             confidences = boxes.conf.cpu().numpy() if len(boxes) > 0 else []
 
             bear_counts_per_frame.append(num_bears)
@@ -342,6 +341,77 @@ class BearDetector:
             print(f"  📊 Max in frame: {stats['max_bears_in_frame']}")
 
         return stats
+
+    def track_and_save_video(self, video_path, output_name=None, conf=0.25,
+                             frame_skip=1, classes=None, tracker='bytetrack', **kwargs):
+        """
+        Track bears in a video and save an output video with bounding boxes and track IDs
+        overlaid (dynamic boxes following each bear). Good for visual inspection.
+
+        Args:
+            video_path: Path to video file or filename in RAW_DATA_DIR
+            output_name: Output folder name under predictions/ (default: timestamp_videostem_track)
+            conf: Confidence threshold
+            frame_skip: Process every Nth frame (1 = every frame; 30 = ~1 fps)
+            classes: Class ID(s) to detect (None = all)
+            tracker: Tracker name, e.g. 'bytetrack', 'botsort'
+            **kwargs: Extra arguments for model.track()
+
+        Returns:
+            (results, output_dir). Output video is in output_dir (MP4 if ffmpeg available, else AVI).
+        """
+        video_path = Path(video_path)
+        if not video_path.is_absolute():
+            video_path = RAW_DATA_DIR / video_path
+        if not video_path.exists():
+            raise FileNotFoundError(f"Video not found: {video_path}")
+
+        if output_name is None:
+            output_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{video_path.stem}_track"
+
+        print(f"\n📹 Tracking & saving video: {video_path.name}")
+        print(f"   Output: {PREDICTIONS_DIR / output_name}\n")
+
+        results = self.model.track(
+            source=str(video_path),
+            conf=conf,
+            classes=classes,
+            tracker=tracker if tracker.endswith('.yaml') else f'{tracker}.yaml',
+            save=True,
+            project=str(PREDICTIONS_DIR),
+            name=output_name,
+            exist_ok=True,
+            stream=False,
+            verbose=True,
+            vid_stride=frame_skip,
+            persist=True,
+            **kwargs
+        )
+
+        output_dir = Path(PREDICTIONS_DIR) / output_name
+        video_files = list(output_dir.glob("*.avi")) + list(output_dir.glob("*.mp4"))
+        out_video = video_files[0] if video_files else None
+        if out_video and out_video.suffix.lower() == ".avi":
+            # Convert to MP4 for better browser streaming
+            mp4_path = out_video.with_suffix(".mp4")
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(out_video), "-c:v", "libx264", "-c:a", "aac", str(mp4_path)],
+                    check=True, capture_output=True
+                )
+                out_video.unlink()
+                out_video = mp4_path
+                print(f"\n✓ Tracked video saved (MP4): {out_video}")
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                print(f"\n✓ Tracked video saved (AVI): {out_video}")
+                if not mp4_path.exists():
+                    print("  (Install ffmpeg to get MP4 for browser playback)")
+        elif out_video:
+            print(f"\n✓ Tracked video saved: {out_video}")
+        else:
+            print(f"\n✓ Output directory: {output_dir}")
+
+        return results, output_dir
 
     def batch_track_bears(self, video_paths=None, video_dir=None, pattern='*.mkv',
                          conf=0.25, frame_skip=30, classes=21, tracker='bytetrack',
