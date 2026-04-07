@@ -12,9 +12,9 @@ new_track_thresh: 0.85
 
 # Track management — keep lost tracks longer so same bear keeps one ID (target: 5 unique)
 # track_buffer: frames to keep lost track before delete. 900 @ 30fps ≈ 30s.
-track_buffer: 300
+track_buffer: 450
 # match_thresh: IoU to match detection to existing track. Lower = easier re-associate.
-match_thresh: 0.35
+match_thresh: 0.7
 
 # Optional settings
 min_box_area: 10         # Minimum bounding box area
