@@ -351,7 +351,7 @@ class BearDetector:
         return stats
 
     @staticmethod
-    def _merge_fragmented_tracks(frame_data, max_gap_frames=600, max_dist_px=300):
+    def _merge_fragmented_tracks(frame_data, max_gap_frames=3600, max_dist_px=150):
         """
         Post-process track IDs to merge fragments from the same bear.
 
@@ -394,6 +394,8 @@ class BearDetector:
 
         track_ids = sorted(track_first_frame.keys())
         parent = {tid: tid for tid in track_ids}
+        # Members of each group root, so we can check transitive co-occurrence
+        members = {tid: {tid} for tid in track_ids}
 
         def find(x):
             while parent[x] != x:
@@ -401,41 +403,113 @@ class BearDetector:
                 x = parent[x]
             return x
 
-        def union(x, y):
-            parent[find(x)] = find(y)
+        def groups_can_merge(root_a, root_b):
+            """Reject merge if any member of one group co-occurs with any member of the other."""
+            for ma in members[root_a]:
+                for mb in members[root_b]:
+                    pair = (min(ma, mb), max(ma, mb))
+                    if pair in co_occurring:
+                        return False
+            return True
 
+        def union(x, y):
+            rx, ry = find(x), find(y)
+            if rx == ry:
+                return
+            parent[rx] = ry
+            members[ry] |= members[rx]
+            del members[rx]
+
+        # Evaluate candidate pairs in order of (temporal gap, spatial dist) so the
+        # most confident merges happen first — this reduces bad transitive chains.
+        candidates = []
         for i, a in enumerate(track_ids):
             for b in track_ids[i + 1:]:
                 pair = (min(a, b), max(a, b))
                 if pair in co_occurring:
                     continue
 
-                # Determine temporal order
                 if track_last_frame[a] < track_first_frame[b]:
                     early, late = a, b
                 elif track_last_frame[b] < track_first_frame[a]:
                     early, late = b, a
                 else:
-                    continue  # Overlapping time but not co-occurring (shouldn't happen)
-
-                if track_first_frame[late] - track_last_frame[early] > max_gap_frames:
                     continue
 
-                # Check spatial proximity at transition point
+                gap = track_first_frame[late] - track_last_frame[early]
+                if gap > max_gap_frames:
+                    continue
+
                 if early in track_last_pos and late in track_first_pos:
                     lx, ly = track_last_pos[early]
                     fx, fy = track_first_pos[late]
                     dist = ((lx - fx) ** 2 + (ly - fy) ** 2) ** 0.5
                     if dist > max_dist_px:
                         continue
+                else:
+                    dist = max_dist_px
 
-                union(a, b)
+                candidates.append((gap, dist, a, b))
+
+        candidates.sort()  # prefer smallest gap, then smallest dist
+
+        for _gap, _dist, a, b in candidates:
+            ra, rb = find(a), find(b)
+            if ra == rb:
+                continue
+            if not groups_can_merge(ra, rb):
+                continue
+            union(a, b)
 
         groups = set(find(tid) for tid in track_ids)
         return len(groups), {tid: find(tid) for tid in track_ids}
 
+    @staticmethod
+    def _filter_spurious_groups(frame_data, id_map, min_duration=30, min_mean_conf=0.80):
+        """
+        Remove merged groups that look like noise (too short OR too low average confidence).
+
+        Args:
+            frame_data: list of per-frame dicts with 'frame', 'track_ids', optional 'track_confs'
+            id_map: {raw_track_id: group_root} from _merge_fragmented_tracks
+            min_duration: group must span at least this many frames (last - first + 1)
+            min_mean_conf: group's mean confidence across all member detections must be >= this
+
+        Returns: (kept_id_map, dropped_groups) — kept_id_map is id_map minus filtered raws
+        """
+        from collections import defaultdict
+        group_first = {}
+        group_last = {}
+        group_confs = defaultdict(list)
+
+        for fd in frame_data:
+            frame = fd['frame']
+            confs = fd.get('track_confs', {})
+            for tid in fd['track_ids']:
+                root = id_map.get(tid)
+                if root is None:
+                    continue
+                if root not in group_first:
+                    group_first[root] = frame
+                group_last[root] = frame
+                if tid in confs:
+                    group_confs[root].append(confs[tid])
+
+        dropped = set()
+        for root in group_first:
+            duration = group_last[root] - group_first[root] + 1
+            confs_list = group_confs[root]
+            mean_conf = (sum(confs_list) / len(confs_list)) if confs_list else 0.0
+            if duration < min_duration or mean_conf < min_mean_conf:
+                dropped.add(root)
+
+        kept = {tid: root for tid, root in id_map.items() if root not in dropped}
+        return kept, dropped
+
     def track_and_save_video(self, video_path, output_name=None, conf=0.25,
-                             frame_skip=1, classes=None, tracker='bytetrack', **kwargs):
+                             frame_skip=1, classes=None, tracker='bytetrack',
+                             max_gap_frames=3600, max_dist_px=150,
+                             min_duration=30, min_mean_conf=0.80, **kwargs):
         """
         Track bears in a video and save an output video with bounding boxes and track IDs
         overlaid. Track IDs are post-processed with _merge_fragmented_tracks so that bears
@@ -493,6 +567,7 @@ class BearDetector:
             boxes = result.boxes
             track_ids = []
             track_positions = {}
+            track_confs = {}
             box_data = {}
 
             if boxes.id is not None:
@@ -503,6 +578,7 @@ class BearDetector:
 
                 for i, tid in enumerate(track_ids):
                     track_positions[tid] = (float(xywh[i][0]), float(xywh[i][1]))
+                    track_confs[tid] = float(confs[i])
                     box_data[tid] = (
                         int(xyxy[i][0]), int(xyxy[i][1]),
                         int(xyxy[i][2]), int(xyxy[i][3]),
@@ -513,13 +589,33 @@ class BearDetector:
                 'frame': len(frame_data),
                 'track_ids': track_ids,
                 'track_positions': track_positions,
+                'track_confs': track_confs,
             })
             frame_boxes.append(box_data)
 
         # --- Merge fragmented track IDs ---
-        _, id_map = self._merge_fragmented_tracks(frame_data)
-        unique_groups = sorted(set(id_map.values()))
-        group_to_display = {g: i + 1 for i, g in enumerate(unique_groups)}
+        _, id_map = self._merge_fragmented_tracks(
+            frame_data, max_gap_frames=max_gap_frames, max_dist_px=max_dist_px
+        )
+        # --- Filter spurious (short or low-confidence) groups ---
+        id_map, dropped = self._filter_spurious_groups(
+            frame_data, id_map, min_duration=min_duration, min_mean_conf=min_mean_conf
+        )
+        if dropped:
+            print(f"   Dropped {len(dropped)} spurious track group(s) "
+                  f"(duration<{min_duration} or mean_conf<{min_mean_conf})")
+        # Display IDs ordered by first-appearance frame, so Bear 1 = first bear seen
+        track_first_frame = {}
+        for fd in frame_data:
+            for tid in fd['track_ids']:
+                if tid not in track_first_frame:
+                    track_first_frame[tid] = fd['frame']
+        group_first_frame = {}
+        for raw, root in id_map.items():
+            if root not in group_first_frame or track_first_frame[raw] < group_first_frame[root]:
+                group_first_frame[root] = track_first_frame[raw]
+        ordered_roots = sorted(group_first_frame.keys(), key=lambda r: group_first_frame[r])
+        group_to_display = {root: i + 1 for i, root in enumerate(ordered_roots)}
 
         # BGR color palette — one consistent color per display ID
         palette = [
@@ -551,7 +647,9 @@ class BearDetector:
             if src_frame % frame_skip == 0:
                 if processed < len(frame_boxes):
                     for raw_id, (x1, y1, x2, y2, conf_score) in frame_boxes[processed].items():
-                        group_id = id_map.get(raw_id, raw_id)
+                        if raw_id not in id_map:
+                            continue  # filtered as spurious (noise/low-conf)
+                        group_id = id_map[raw_id]
                         display_id = group_to_display.get(group_id, raw_id)
                         color = palette[(display_id - 1) % len(palette)]
                         cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)

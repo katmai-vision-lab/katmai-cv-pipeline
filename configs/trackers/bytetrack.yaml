@@ -4,11 +4,11 @@
 tracker_type: bytetrack
 
 # Confidence thresholds
-track_high_thresh: 0.4   # High confidence threshold
-track_low_thresh: 0.15   # Low confidence (recover occluded)
+track_high_thresh: 0.25  # High confidence threshold
+track_low_thresh: 0.08   # Low confidence (recover occluded)
 # new_track_thresh: only detections above this get a NEW track. Higher = fewer
 #   spurious IDs (6,7,8,9) from noise/splash; same bear more likely to keep 5.
-new_track_thresh: 0.85
+new_track_thresh: 0.5
 
 # Track management — keep lost tracks longer so same bear keeps one ID (target: 5 unique)
 # track_buffer: frames to keep lost track before delete. 900 @ 30fps ≈ 30s.
@@ -19,3 +19,4 @@ match_thresh: 0.7
 # Optional settings
 min_box_area: 10         # Minimum bounding box area
 mot20: False             # MOT20 dataset format
+fuse_score: True         # Fuse confidence score with IoU for association

@@ -38,6 +38,14 @@ def main():
                         help="Tracker: bytetrack, botsort")
     parser.add_argument("--output-name", type=str, default=None,
                         help="Output folder name under predictions/")
+    parser.add_argument("--max-gap-frames", type=int, default=3600,
+                        help="Merge: max frame gap to still connect same bear (default 3600 = 2min @ 30fps)")
+    parser.add_argument("--max-dist-px", type=int, default=150,
+                        help="Merge: max pixel distance at transition (default 150)")
+    parser.add_argument("--min-duration", type=int, default=30,
+                        help="Filter: drop groups shorter than N frames (default 30)")
+    parser.add_argument("--min-mean-conf", type=float, default=0.80,
+                        help="Filter: drop groups with mean conf < this (default 0.80)")
 
     args = parser.parse_args()
 
@@ -70,6 +78,10 @@ def main():
         frame_skip=args.frame_skip,
         classes=args.classes,
         tracker=args.tracker,
+        max_gap_frames=args.max_gap_frames,
+        max_dist_px=args.max_dist_px,
+        min_duration=args.min_duration,
+        min_mean_conf=args.min_mean_conf,
     )
 
     video_files = list(output_dir.glob("*.mp4")) + list(output_dir.glob("*.avi"))
