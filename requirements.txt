@@ -28,3 +28,5 @@ omegaconf>=2.3.0               # Required for MegaDetector
 pytorch-lightning>=2.0.0       # Required for MegaDetector
 lightning>=2.0.0               # Required for MegaDetector
 PytorchWildlife>=1.0.0         # Required for MegaDetector v5
+
+einops

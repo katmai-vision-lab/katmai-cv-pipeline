@@ -24,7 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.detection.detector import BearDetector
 from src.detection.metrics import VideoEvaluator
-from src.config import YOLOV8N_PATH, PREDICTIONS_DIR, RAW_DATA_DIR, DATA_DIR
+from src.config import TRAINED_BEAR_DETECTOR_PATH, PREDICTIONS_DIR, RAW_DATA_DIR, DATA_DIR
 
 def evaluate_video(detector, video_path, ground_truth_count=None, conf=0.25):
     """
@@ -142,7 +142,7 @@ Examples:
                        help='Video filename or path (required for counting/simple modes)')
     parser.add_argument('--data', type=str, default=None,
                        help='Dataset YAML path (required for dataset mode)')
-    parser.add_argument('--model', type=str, default=str(YOLOV8N_PATH),
+    parser.add_argument('--model', type=str, default=str(TRAINED_BEAR_DETECTOR_PATH),
                        help='Path to model weights')
     parser.add_argument('--conf', type=float, default=0.25,
                        help='Confidence threshold')

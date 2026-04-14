@@ -1,18 +1,20 @@
 # ByteTrack configuration for bear tracking
-# Optimized for reducing ID fragmentation and improving tracking accuracy
+# Optimized for reducing ID fragmentation (e.g. same bear ID 5 -> 10 less often)
 
 tracker_type: bytetrack
 
 # Confidence thresholds
-# Lower thresholds to match detection confidence levels
-track_high_thresh: 0.4   # High confidence threshold (was 0.5)
-track_low_thresh: 0.15   # Low confidence threshold (was 0.1)
-new_track_thresh: 0.5    # Threshold for creating new tracks (was 0.6)
+track_high_thresh: 0.4   # High confidence threshold
+track_low_thresh: 0.15   # Low confidence (recover occluded)
+# new_track_thresh: only detections above this get a NEW track. Higher = fewer
+#   spurious IDs (6,7,8,9) from noise/splash; same bear more likely to keep 5.
+new_track_thresh: 0.85
 
-# Track management
-# Increase buffer to reduce ID fragmentation
-track_buffer: 60         # Frames to keep lost tracks (was 30, 60≈2s at 30fps)
-match_thresh: 0.7        # IoU threshold for matching (was 0.8, lower=more lenient)
+# Track management — keep lost tracks longer so same bear keeps one ID (target: 5 unique)
+# track_buffer: frames to keep lost track before delete. 900 @ 30fps ≈ 30s.
+track_buffer: 450
+# match_thresh: IoU to match detection to existing track. Lower = easier re-associate.
+match_thresh: 0.7
 
 # Optional settings
 min_box_area: 10         # Minimum bounding box area

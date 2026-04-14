@@ -19,6 +19,7 @@ TRAINED_MODELS_DIR = MODELS_DIR / 'trained'
 
 # Model paths (commonly used models)
 YOLOV8N_PATH = PRETRAINED_MODELS_DIR / 'yolov8n.pt'
+TRAINED_BEAR_DETECTOR_PATH = TRAINED_MODELS_DIR / 'bear_detector3' / 'weights' / 'best.pt'
 
 # Output directories
 PREDICTIONS_DIR = PROJECT_ROOT / 'predictions'
@@ -28,3 +29,4 @@ TRACKERS_CONFIG_DIR = PROJECT_ROOT / 'configs' / 'trackers'
 
 # Default YOLO classes
 COCO_BEAR_CLASS = 21
+FINETUNED_BEAR_CLASS = 0  # Class ID in the fine-tuned bear_detector3 model
