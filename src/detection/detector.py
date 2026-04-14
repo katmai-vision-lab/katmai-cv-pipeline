@@ -465,17 +465,16 @@ class BearDetector:
         return len(groups), {tid: find(tid) for tid in track_ids}
 
     @staticmethod
-    def _filter_spurious_groups(frame_data, id_map, min_duration=30, min_mean_conf=0.80):
+    def _filter_spurious_groups(frame_data, id_map, min_duration=30, min_mean_conf=0.80,
+                                long_duration=500):
         """
-        Remove merged groups that look like noise (too short OR too low average confidence).
+        Drop groups that look like noise. Compound rule:
+          - duration < min_duration → always drop (too short to be real).
+          - duration >= long_duration → always keep (long-lived tracks are trustworthy
+            even if mean_conf is slightly below threshold due to occlusion).
+          - otherwise → require mean_conf >= min_mean_conf.
 
-        Args:
-            frame_data: list of per-frame dicts with 'frame', 'track_ids', optional 'track_confs'
-            id_map: {raw_track_id: group_root} from _merge_fragmented_tracks
-            min_duration: group must span at least this many frames (last - first + 1)
-            min_mean_conf: group's mean confidence across all member detections must be >= this
-
-        Returns: (kept_id_map, dropped_groups) — kept_id_map is id_map minus filtered raws
+        Returns: (kept_id_map, dropped_groups)
         """
         from collections import defaultdict
         group_first = {}
@@ -500,7 +499,9 @@ class BearDetector:
             duration = group_last[root] - group_first[root] + 1
             confs_list = group_confs[root]
             mean_conf = (sum(confs_list) / len(confs_list)) if confs_list else 0.0
-            if duration < min_duration or mean_conf < min_mean_conf:
+            if duration < min_duration:
+                dropped.add(root)
+            elif duration < long_duration and mean_conf < min_mean_conf:
                 dropped.add(root)
 
         kept = {tid: root for tid, root in id_map.items() if root not in dropped}
