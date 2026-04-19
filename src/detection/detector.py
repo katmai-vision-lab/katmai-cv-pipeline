@@ -302,9 +302,14 @@ class BearDetector:
         for frame_id, result in enumerate(results):
             boxes = result.boxes
             track_ids = []
+            track_positions = {}
             if boxes.id is not None:
                 track_ids = boxes.id.cpu().numpy().astype(int).tolist()
                 unique_track_ids.update(track_ids)
+                if boxes.xywh is not None:
+                    centers = boxes.xywh[:, :2].cpu().numpy()
+                    for tid, (cx, cy) in zip(track_ids, centers):
+                        track_positions[tid] = (float(cx), float(cy))
 
             num_bears = len(track_ids)
             confidences = boxes.conf.cpu().numpy() if len(boxes) > 0 else []
@@ -314,11 +319,14 @@ class BearDetector:
                 'frame': frame_id * frame_skip,
                 'num_bears': num_bears,
                 'track_ids': track_ids,
+                'track_positions': track_positions,
                 'avg_confidence': confidences.mean() if len(confidences) > 0 else 0
             })
 
         duration = time.time() - start_time
         bear_counts_array = np.array(bear_counts_per_frame)
+
+        merged_count, _ = self._merge_fragmented_tracks(frame_data)
 
         stats = {
             'video_name': video_path.name,
@@ -330,8 +338,8 @@ class BearDetector:
             'max_bears_in_frame': int(bear_counts_array.max()) if len(bear_counts_array) > 0 else 0,
             'avg_bears_per_frame': float(bear_counts_array.mean()) if len(bear_counts_array) > 0 else 0,
             'total_detections': int(bear_counts_array.sum()),
-            'unique_bears_tracked': len(unique_track_ids),
-            'track_ids': sorted(list(unique_track_ids)),
+            'unique_bears_tracked': merged_count,
+            'raw_track_ids': sorted(list(unique_track_ids)),
             'frame_data': frame_data
         }
 
@@ -342,11 +350,176 @@ class BearDetector:
 
         return stats
 
+    @staticmethod
+    def _merge_fragmented_tracks(frame_data, max_gap_frames=3600, max_dist_px=150):
+        """
+        Post-process track IDs to merge fragments from the same bear.
+
+        A bear that briefly disappears (occlusion, enters water) may lose its track
+        and reappear with a new ID. Two tracks are merged when:
+          1. They never appear in the same frame (can't be different bears simultaneously)
+          2. One ends before the other starts (temporally sequential)
+          3. The gap between them is within max_gap_frames
+          4. The last known position of the earlier track is within max_dist_px of
+             the first known position of the later track
+
+        Returns (merged_unique_count, {track_id: group_id})
+        """
+        from collections import defaultdict
+
+        track_first_frame = {}
+        track_last_frame = {}
+        track_first_pos = {}
+        track_last_pos = {}
+        co_occurring = set()
+
+        for fd in frame_data:
+            frame = fd['frame']
+            ids = fd['track_ids']
+            positions = fd.get('track_positions', {})
+
+            for tid in ids:
+                if tid not in track_first_frame:
+                    track_first_frame[tid] = frame
+                    if tid in positions:
+                        track_first_pos[tid] = positions[tid]
+                track_last_frame[tid] = frame
+                if tid in positions:
+                    track_last_pos[tid] = positions[tid]
+
+            for i in range(len(ids)):
+                for j in range(i + 1, len(ids)):
+                    a, b = min(ids[i], ids[j]), max(ids[i], ids[j])
+                    co_occurring.add((a, b))
+
+        track_ids = sorted(track_first_frame.keys())
+        parent = {tid: tid for tid in track_ids}
+        # Members of each group root, so we can check transitive co-occurrence
+        members = {tid: {tid} for tid in track_ids}
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def groups_can_merge(root_a, root_b):
+            """Reject merge if any member of one group co-occurs with any member of the other."""
+            for ma in members[root_a]:
+                for mb in members[root_b]:
+                    pair = (min(ma, mb), max(ma, mb))
+                    if pair in co_occurring:
+                        return False
+            return True
+
+        def union(x, y):
+            rx, ry = find(x), find(y)
+            if rx == ry:
+                return
+            parent[rx] = ry
+            members[ry] |= members[rx]
+            del members[rx]
+
+        # Evaluate candidate pairs in order of (temporal gap, spatial dist) so the
+        # most confident merges happen first — this reduces bad transitive chains.
+        candidates = []
+        for i, a in enumerate(track_ids):
+            for b in track_ids[i + 1:]:
+                pair = (min(a, b), max(a, b))
+                if pair in co_occurring:
+                    continue
+
+                if track_last_frame[a] < track_first_frame[b]:
+                    early, late = a, b
+                elif track_last_frame[b] < track_first_frame[a]:
+                    early, late = b, a
+                else:
+                    continue
+
+                gap = track_first_frame[late] - track_last_frame[early]
+                if gap > max_gap_frames:
+                    continue
+
+                if early in track_last_pos and late in track_first_pos:
+                    lx, ly = track_last_pos[early]
+                    fx, fy = track_first_pos[late]
+                    dist = ((lx - fx) ** 2 + (ly - fy) ** 2) ** 0.5
+                    if dist > max_dist_px:
+                        continue
+                else:
+                    dist = max_dist_px
+
+                candidates.append((gap, dist, a, b))
+
+        candidates.sort()  # prefer smallest gap, then smallest dist
+
+        for _gap, _dist, a, b in candidates:
+            ra, rb = find(a), find(b)
+            if ra == rb:
+                continue
+            if not groups_can_merge(ra, rb):
+                continue
+            union(a, b)
+
+        groups = set(find(tid) for tid in track_ids)
+        return len(groups), {tid: find(tid) for tid in track_ids}
+
+    @staticmethod
+    def _filter_spurious_groups(frame_data, id_map, min_duration=30, min_mean_conf=0.80,
+                                long_duration=500):
+        """
+        Drop groups that look like noise. Compound rule:
+          - duration < min_duration → always drop (too short to be real).
+          - duration >= long_duration → always keep (long-lived tracks are trustworthy
+            even if mean_conf is slightly below threshold due to occlusion).
+          - otherwise → require mean_conf >= min_mean_conf.
+
+        Returns: (kept_id_map, dropped_groups)
+        """
+        from collections import defaultdict
+        group_first = {}
+        group_last = {}
+        group_confs = defaultdict(list)
+
+        for fd in frame_data:
+            frame = fd['frame']
+            confs = fd.get('track_confs', {})
+            for tid in fd['track_ids']:
+                root = id_map.get(tid)
+                if root is None:
+                    continue
+                if root not in group_first:
+                    group_first[root] = frame
+                group_last[root] = frame
+                if tid in confs:
+                    group_confs[root].append(confs[tid])
+
+        dropped = set()
+        for root in group_first:
+            duration = group_last[root] - group_first[root] + 1
+            confs_list = group_confs[root]
+            mean_conf = (sum(confs_list) / len(confs_list)) if confs_list else 0.0
+            if duration < min_duration:
+                dropped.add(root)
+            elif duration < long_duration and mean_conf < min_mean_conf:
+                dropped.add(root)
+
+        kept = {tid: root for tid, root in id_map.items() if root not in dropped}
+        return kept, dropped
+
     def track_and_save_video(self, video_path, output_name=None, conf=0.25,
-                             frame_skip=1, classes=None, tracker='bytetrack', **kwargs):
+                             frame_skip=1, classes=None, tracker='bytetrack',
+                             max_gap_frames=3600, max_dist_px=150,
+                             min_duration=30, min_mean_conf=0.80, **kwargs):
         """
         Track bears in a video and save an output video with bounding boxes and track IDs
-        overlaid (dynamic boxes following each bear). Good for visual inspection.
+        overlaid. Track IDs are post-processed with _merge_fragmented_tracks so that bears
+        which briefly disappear keep the same display ID when they reappear.
+
+        Two-pass approach:
+          Pass 1 — stream tracking results to collect bbox data and positions.
+          Merge  — compute id_map remapping fragmented track IDs.
+          Pass 2 — read original video with cv2 and render with remapped IDs.
 
         Args:
             video_path: Path to video file or filename in RAW_DATA_DIR
@@ -358,8 +531,10 @@ class BearDetector:
             **kwargs: Extra arguments for model.track()
 
         Returns:
-            (results, output_dir). Output video is in output_dir (MP4 if ffmpeg available, else AVI).
+            (None, output_dir). Output video is in output_dir (MP4 if ffmpeg available, else AVI).
         """
+        import cv2
+
         video_path = Path(video_path)
         if not video_path.is_absolute():
             video_path = RAW_DATA_DIR / video_path
@@ -372,46 +547,142 @@ class BearDetector:
         print(f"\n📹 Tracking & saving video: {video_path.name}")
         print(f"   Output: {PREDICTIONS_DIR / output_name}\n")
 
-        results = self.model.track(
+        # --- Pass 1: stream to collect tracking data (no video writing) ---
+        results_stream = self.model.track(
             source=str(video_path),
             conf=conf,
             classes=classes,
             tracker=tracker if tracker.endswith('.yaml') else f'{tracker}.yaml',
-            save=True,
-            project=str(PREDICTIONS_DIR),
-            name=output_name,
-            exist_ok=True,
-            stream=False,
-            verbose=True,
+            save=False,
+            stream=True,
+            verbose=False,
             vid_stride=frame_skip,
             persist=True,
             **kwargs
         )
 
-        output_dir = Path(PREDICTIONS_DIR) / output_name
-        video_files = list(output_dir.glob("*.avi")) + list(output_dir.glob("*.mp4"))
-        out_video = video_files[0] if video_files else None
-        if out_video and out_video.suffix.lower() == ".avi":
-            # Convert to MP4 for better browser streaming
-            mp4_path = out_video.with_suffix(".mp4")
-            try:
-                subprocess.run(
-                    ["ffmpeg", "-y", "-i", str(out_video), "-c:v", "libx264", "-c:a", "aac", str(mp4_path)],
-                    check=True, capture_output=True
-                )
-                out_video.unlink()
-                out_video = mp4_path
-                print(f"\n✓ Tracked video saved (MP4): {out_video}")
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                print(f"\n✓ Tracked video saved (AVI): {out_video}")
-                if not mp4_path.exists():
-                    print("  (Install ffmpeg to get MP4 for browser playback)")
-        elif out_video:
-            print(f"\n✓ Tracked video saved: {out_video}")
-        else:
-            print(f"\n✓ Output directory: {output_dir}")
+        frame_data = []   # for _merge_fragmented_tracks
+        frame_boxes = []  # [{raw_track_id: (x1, y1, x2, y2, conf)}, ...]
 
-        return results, output_dir
+        for result in results_stream:
+            boxes = result.boxes
+            track_ids = []
+            track_positions = {}
+            track_confs = {}
+            box_data = {}
+
+            if boxes.id is not None:
+                track_ids = boxes.id.cpu().numpy().astype(int).tolist()
+                xyxy = boxes.xyxy.cpu().numpy()
+                xywh = boxes.xywh.cpu().numpy()
+                confs = boxes.conf.cpu().numpy()
+
+                for i, tid in enumerate(track_ids):
+                    track_positions[tid] = (float(xywh[i][0]), float(xywh[i][1]))
+                    track_confs[tid] = float(confs[i])
+                    box_data[tid] = (
+                        int(xyxy[i][0]), int(xyxy[i][1]),
+                        int(xyxy[i][2]), int(xyxy[i][3]),
+                        float(confs[i]),
+                    )
+
+            frame_data.append({
+                'frame': len(frame_data),
+                'track_ids': track_ids,
+                'track_positions': track_positions,
+                'track_confs': track_confs,
+            })
+            frame_boxes.append(box_data)
+
+        # --- Merge fragmented track IDs ---
+        _, id_map = self._merge_fragmented_tracks(
+            frame_data, max_gap_frames=max_gap_frames, max_dist_px=max_dist_px
+        )
+        # --- Filter spurious (short or low-confidence) groups ---
+        id_map, dropped = self._filter_spurious_groups(
+            frame_data, id_map, min_duration=min_duration, min_mean_conf=min_mean_conf
+        )
+        if dropped:
+            print(f"   Dropped {len(dropped)} spurious track group(s) "
+                  f"(duration<{min_duration} or mean_conf<{min_mean_conf})")
+        # Display IDs ordered by first-appearance frame, so Bear 1 = first bear seen
+        track_first_frame = {}
+        for fd in frame_data:
+            for tid in fd['track_ids']:
+                if tid not in track_first_frame:
+                    track_first_frame[tid] = fd['frame']
+        group_first_frame = {}
+        for raw, root in id_map.items():
+            if root not in group_first_frame or track_first_frame[raw] < group_first_frame[root]:
+                group_first_frame[root] = track_first_frame[raw]
+        ordered_roots = sorted(group_first_frame.keys(), key=lambda r: group_first_frame[r])
+        group_to_display = {root: i + 1 for i, root in enumerate(ordered_roots)}
+
+        # BGR color palette — one consistent color per display ID
+        palette = [
+            (233, 180, 86), (0, 159, 230), (115, 158, 0),
+            (66, 228, 240), (178, 114, 0), (0, 94, 213),
+            (167, 121, 204), (255, 255, 0), (255, 0, 255), (0, 255, 0),
+        ]
+
+        # --- Pass 2: read original video, render with remapped IDs ---
+        cap = cv2.VideoCapture(str(video_path))
+        src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        out_fps = src_fps / frame_skip if frame_skip > 1 else src_fps
+
+        output_dir = Path(PREDICTIONS_DIR) / output_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        avi_path = output_dir / f"{video_path.stem}.avi"
+
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        writer = cv2.VideoWriter(str(avi_path), fourcc, out_fps, (width, height))
+
+        processed = 0
+        src_frame = 0
+        while cap.isOpened():
+            ret, img = cap.read()
+            if not ret:
+                break
+            if src_frame % frame_skip == 0:
+                if processed < len(frame_boxes):
+                    for raw_id, (x1, y1, x2, y2, conf_score) in frame_boxes[processed].items():
+                        if raw_id not in id_map:
+                            continue  # filtered as spurious (noise/low-conf)
+                        group_id = id_map[raw_id]
+                        display_id = group_to_display.get(group_id, raw_id)
+                        color = palette[(display_id - 1) % len(palette)]
+                        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+                        label = f"Bear {display_id}  {conf_score:.2f}"
+                        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
+                        cv2.rectangle(img, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
+                        cv2.putText(img, label, (x1 + 2, y1 - 4),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+                writer.write(img)
+                processed += 1
+            src_frame += 1
+
+        cap.release()
+        writer.release()
+
+        # Convert AVI to MP4 for better browser streaming
+        out_video = avi_path
+        mp4_path = avi_path.with_suffix(".mp4")
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", str(avi_path), "-c:v", "libx264", "-c:a", "aac", str(mp4_path)],
+                check=True, capture_output=True
+            )
+            avi_path.unlink()
+            out_video = mp4_path
+            print(f"\n✓ Tracked video saved (MP4): {out_video}")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print(f"\n✓ Tracked video saved (AVI): {out_video}")
+            if not mp4_path.exists():
+                print("  (Install ffmpeg to get MP4 for browser playback)")
+
+        return None, output_dir
 
     def batch_track_bears(self, video_paths=None, video_dir=None, pattern='*.mkv',
                          conf=0.25, frame_skip=30, classes=21, tracker='bytetrack',
