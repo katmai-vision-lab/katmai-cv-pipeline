@@ -666,6 +666,53 @@ class BearDetector:
         cap.release()
         writer.release()
 
+        # --- Export per-bear trajectories as JSON ---
+        from collections import defaultdict
+        raw_to_display = {
+            raw: group_to_display[root] for raw, root in id_map.items() if root in group_to_display
+        }
+        display_to_raws = defaultdict(list)
+        for raw, disp in raw_to_display.items():
+            display_to_raws[disp].append(raw)
+
+        bear_trajectories = defaultdict(list)
+        for frame_idx, box_data in enumerate(frame_boxes):
+            for raw_id, (x1, y1, x2, y2, conf_score) in box_data.items():
+                disp = raw_to_display.get(raw_id)
+                if disp is None:
+                    continue
+                w = x2 - x1
+                h = y2 - y1
+                bear_trajectories[disp].append({
+                    'frame': frame_idx,
+                    'cx': round(x1 + w / 2, 1),
+                    'cy': round(y1 + h / 2, 1),
+                    'w': w,
+                    'h': h,
+                    'conf': round(conf_score, 3),
+                    'raw_id': raw_id,
+                })
+
+        trajectory_payload = {
+            'video': video_path.name,
+            'total_frames': len(frame_boxes),
+            'fps': src_fps,
+            'bears': {
+                f'bear_{disp}': {
+                    'raw_track_ids': sorted(display_to_raws[disp]),
+                    'num_detections': len(bear_trajectories[disp]),
+                    'first_frame': bear_trajectories[disp][0]['frame'] if bear_trajectories[disp] else None,
+                    'last_frame': bear_trajectories[disp][-1]['frame'] if bear_trajectories[disp] else None,
+                    'trajectory': bear_trajectories[disp],
+                }
+                for disp in sorted(bear_trajectories.keys())
+            },
+        }
+        trajectory_path = output_dir / 'trajectories.json'
+        with open(trajectory_path, 'w') as f:
+            json.dump(trajectory_payload, f, indent=2)
+        print(f"   Saved trajectories: {trajectory_path}")
+
         # Convert AVI to MP4 for better browser streaming
         out_video = avi_path
         mp4_path = avi_path.with_suffix(".mp4")
