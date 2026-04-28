@@ -252,19 +252,23 @@ cv2.imwrite('calibration_frame.jpg', frame)
 cap.release()
 "
 
-```python
-python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_2.mkv
-```
-
 Debug mode
 ```python
-python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_2.mov ./debug_salmon_frames/
+python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov ./debug_salmon_frames/ > predictions/result.json
 ```
 
-Diagnose.
+Save your result to a file first.
 ```python
-python src/detection/salmons/diagnose_blobs.py data/raw/salmons/salmon_jump_0.mp4
+python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov > predictions/result.json
 ```
+Then render.
+```python
+python src/detection/salmons/visualize_salmon_jumps.py data/raw/salmons/salmon_jump_9.mov predictions/result.json
+```
+
+### Parameters
+![alt text](image.png)
+
 ## Useful Link
 SharePoint:
 https://uwnetid.sharepoint.com/sites/katmai-vision-lab/Shared%20Documents/Forms/AllItems.aspx

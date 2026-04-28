@@ -18,20 +18,23 @@ SILVER_HSV_LOWER = np.array([0,  0,  160])
 SILVER_HSV_UPPER = np.array([180, 40, 255])
 
 # Minimum blob area in pixels^2 — rejects splashes, keeps fish
-MIN_BLOB_AREA = 800
+MIN_BLOB_AREA = 600
 MAX_BLOB_AREA = 8000
 
 # Region of interest: (x, y, width, height) — set to None to use full frame
 # Crop to the water surface area to reduce false positives
-ROI = None  # e.g. (0, 100, 1280, 400)
+#ROI = None  # e.g. (0, 100, 1280, 400)
+# ROI =  (399, 630, 321, 458)
+ROI = (491, 731, 235, 307)
 
 
-def extract_frames(video_path: str, sample_rate: int = 3):
+def extract_frames(video_path: str, sample_rate: int = 2):
     """Yield (frame_index, frame) every `sample_rate` frames."""
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    print(f"Video: {fps:.1f} fps, {total} frames ({total/fps:.1f}s)")
+    # print(f"Video: {fps:.1f} fps, {total} frames ({total/fps:.1f}s)")
+    print(f"Video: {fps:.1f} fps, {total} frames ({total/fps:.1f}s)", file=sys.stderr)
 
     idx = 0
     while True:
@@ -67,36 +70,6 @@ def get_salmon_color_mask(frame):
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel)
     return combined
-
-
-# def detect_salmon_blobs(frame, fg_mask, color_mask):
-#     """
-#     Combine foreground motion + color to find salmon candidates.
-#     Returns list of (centroid_x, centroid_y, area) for each blob.
-#     """
-#     # Salmon pixel = moving AND salmon-colored
-#     combined = cv2.bitwise_and(fg_mask, color_mask)
-
-#     if ROI:
-#         x, y, w, h = ROI
-#         roi_mask = np.zeros_like(combined)
-#         roi_mask[y:y+h, x:x+w] = combined[y:y+h, x:x+w]
-#         combined = roi_mask
-
-#     contours, _ = cv2.findContours(
-#         combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-#     )
-
-#     blobs = []
-#     for cnt in contours:
-#         area = cv2.contourArea(cnt)
-#         if MIN_BLOB_AREA < area < MAX_BLOB_AREA:
-#             M = cv2.moments(cnt)
-#             if M["m00"] > 0:
-#                 cx = int(M["m10"] / M["m00"])
-#                 cy = int(M["m01"] / M["m00"])
-#                 blobs.append((cx, cy, area))
-#     return blobs
 
 
 def detect_salmon_blobs(frame, fg_mask, color_mask):
@@ -140,7 +113,7 @@ def detect_salmon_blobs(frame, fg_mask, color_mask):
 
 
 def count_jumps_from_trajectory(blob_presence_signal: list, fps: float,
-                                sample_rate: int, min_jump_gap_sec: float = 1.0):
+                                sample_rate: int, min_jump_gap_sec: float = 0.1):
     """
     Detect jump events from the blob presence signal over time.
     A 'jump' = blob appears above water line (low y = high in frame),
@@ -173,7 +146,7 @@ def count_jumps_from_trajectory(blob_presence_signal: list, fps: float,
     return len(peaks), timestamps, smoothed
 
 
-def count_salmon_jumps(video_path: str, sample_rate: int = 3,
+def count_salmon_jumps(video_path: str, sample_rate: int = 2,
                        debug_output: str = None):
     """
     Main function: count salmon jumps in a video.
@@ -193,7 +166,7 @@ def count_salmon_jumps(video_path: str, sample_rate: int = 3,
     # MOG2: learns background over first ~50 frames automatically
     bg_subtractor = cv2.createBackgroundSubtractorMOG2(
         history=500,        # longer memory = water surface becomes "background"
-        varThreshold=60,    # higher = only fast/distinct motion triggers
+        varThreshold=100,    # higher = only fast/distinct motion triggers
         detectShadows=False
     )
 
