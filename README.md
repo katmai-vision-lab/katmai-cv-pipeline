@@ -240,6 +240,31 @@ OutPut the Bytetrack video
 ```
 python -m src.detection.track_video   --video "bears/2025-09-19 23-30-11_Brooks_Falls_Low_5_bears.mp4"   --model models/trained/bear_detector3/weights/best.pt   --classes 0   --conf 0.7   --frame-skip 1
 ```
+
+## Salmon Jump
+### Extract one frame for calibration
+python -c "
+import cv2
+cap = cv2.VideoCapture('data/raw/salmons/salmon_jump_2.mkv')
+cap.set(cv2.CAP_PROP_POS_FRAMES, 100)
+_, frame = cap.read()
+cv2.imwrite('calibration_frame.jpg', frame)
+cap.release()
+"
+
+```python
+python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_2.mkv
+```
+
+Debug mode
+```python
+python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_2.mov ./debug_salmon_frames/
+```
+
+Diagnose.
+```python
+python src/detection/salmons/diagnose_blobs.py data/raw/salmons/salmon_jump_0.mp4
+```
 ## Useful Link
 SharePoint:
 https://uwnetid.sharepoint.com/sites/katmai-vision-lab/Shared%20Documents/Forms/AllItems.aspx
