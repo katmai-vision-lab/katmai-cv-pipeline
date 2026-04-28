@@ -6,7 +6,7 @@
   "min_blob_area": 300,
   "max_blob_area": 8000,
   "roi": [491, 731, 235, 307],
-  "min_jump_gap_sec": 0.1,
+  "min_jump_gap_sec": 0.1, 
   "sample_rate": 3,
   "mog2_history": 500,
   "mog2_var_threshold": 40
