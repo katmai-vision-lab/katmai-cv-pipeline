@@ -3,7 +3,7 @@
   "salmon_hsv_upper": [180, 60, 160],
   "silver_hsv_lower": [0, 0, 160],
   "silver_hsv_upper": [180, 40, 255],
-  "min_blob_area": 400,
+  "min_blob_area": 200,
   "max_blob_area": 8000,
   "roi": [491, 731, 235, 307],
   "min_jump_gap_sec": 0.5,

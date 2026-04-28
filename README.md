@@ -285,6 +285,22 @@ python visualize_jumps.py video.mov result.json --no-show-roi
 python visualize_jumps.py video.mov result.json --output review/jump9_annotated.mp4
 ```
 
+**Explaination**
+
+Each debug frame now saves as a 2×2 grid plus a status bar at the bottom:
+```bash
+┌─────────────────────┬─────────────────────┐
+│  annotated original │   fg mask (motion)  │
+│  ROI dim + cyan box │   white = movement  │
+│  green blob circles │                     │
+├─────────────────────┼─────────────────────┤
+│   colour mask       │  combined mask      │
+│   white = salmon    │  fg AND colour      │
+│   HSV range hit     │  AND ROI applied    │
+└─────────────────────┴─────────────────────┘
+│frame 00438 | 7.30s / 15.4s | blobs: 2 | min_area=800 max_area=8000 roi=[491,731,235,307] │
+```
+
 ### Full pipeline
 ```bash
 python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov --config configs/salmon/config.json > predictions/result.json --debug ./debug_frames/
