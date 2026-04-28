@@ -1,0 +1,13 @@
+{
+  "salmon_hsv_lower": [0, 0, 40],
+  "salmon_hsv_upper": [180, 60, 160],
+  "silver_hsv_lower": [0, 0, 160],
+  "silver_hsv_upper": [180, 40, 255],
+  "min_blob_area": 600,
+  "max_blob_area": 8000,
+  "roi": [491, 731, 235, 307],
+  "min_jump_gap_sec": 0.5,
+  "sample_rate": 2,
+  "mog2_history": 500,
+  "mog2_var_threshold": 100
+}

@@ -242,7 +242,57 @@ python -m src.detection.track_video   --video "bears/2025-09-19 23-30-11_Brooks_
 ```
 
 ## Salmon Jump
-### Extract one frame for calibration
+
+### Usage of salmon_jump_counter_cv.py
+```bash
+# Basic — uses defaults only
+python salmon_jump_counter_cv.py video.mov
+
+# Load your saved config
+python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov --config configs/salmon/config.json
+
+# Override just the ROI for a new video, keep everything else from config
+python salmon_jump_counter_cv.py video2.mov --config config.json --roi 100 200 400 300
+
+# Disable ROI entirely
+python salmon_jump_counter_cv.py video.mov --config config.json --no-roi
+
+# Tune blob sizes and gap without editing any file
+python salmon_jump_counter_cv.py video.mov --min-blob-area 600 --max-blob-area 5000 --min-jump-gap-sec 1.0
+
+# Try new HSV values on a different video
+python salmon_jump_counter_cv.py ocean_video.mov --salmon-hsv-lower 5 40 60 --salmon-hsv-upper 25 255 255
+
+# Once happy with a combination, save it as a new config for that environment
+python salmon_jump_counter_cv.py video.mov --roi 0 400 1280 300 --min-blob-area 500 --save-config river_config.json
+```
+
+### Visualization script usage
+```bash
+# Simplest — ROI comes automatically from the embedded config in result.json
+python visualize_jumps.py video.mov result.json
+
+# Override ROI for a different crop
+python visualize_jumps.py video.mov result.json --roi 100 400 500 300
+
+# Use a specific config.json as the ROI source
+python visualize_jumps.py video.mov result.json --config river_config.json
+
+# Strip the ROI overlay off the output video
+python visualize_jumps.py video.mov result.json --no-show-roi
+
+# Custom output path
+python visualize_jumps.py video.mov result.json --output review/jump9_annotated.mp4
+```
+
+### Full pipeline
+```bash
+python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov --config configs/salmon/config.json > predictions/result.json
+
+python src/detection/salmons/visualize_salmon_jumps.py data/raw/salmons/salmon_jump_9.mov predictions/result.json
+```
+
+<!-- ### Extract one frame for calibration
 python -c "
 import cv2
 cap = cv2.VideoCapture('data/raw/salmons/salmon_jump_2.mkv')
@@ -264,11 +314,11 @@ python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_j
 Then render.
 ```python
 python src/detection/salmons/visualize_salmon_jumps.py data/raw/salmons/salmon_jump_9.mov predictions/result.json
-```
+``` -->
 
 ### Parameters
-![alt text](image.png)
+![alt text](/docs/images/salmon-params.png)
 
 ## Useful Link
-SharePoint:
+SharePoint:s
 https://uwnetid.sharepoint.com/sites/katmai-vision-lab/Shared%20Documents/Forms/AllItems.aspx
