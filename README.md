@@ -287,7 +287,7 @@ python visualize_jumps.py video.mov result.json --output review/jump9_annotated.
 
 ### Full pipeline
 ```bash
-python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov --config configs/salmon/config.json > predictions/result.json
+python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov --config configs/salmon/config.json > predictions/result.json --debug ./debug_frames/
 
 python src/detection/salmons/visualize_salmon_jumps.py data/raw/salmons/salmon_jump_9.mov predictions/result.json
 ```

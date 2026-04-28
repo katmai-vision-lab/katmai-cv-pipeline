@@ -141,7 +141,8 @@ def count_jumps_from_trajectory(blob_signal, fps, cfg: SalmonConfig):
 def count_salmon_jumps(video_path: str, cfg: SalmonConfig,
                        debug_output: str = None) -> dict:
     cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS)
+    fps         = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
 
     bg_subtractor = cv2.createBackgroundSubtractorMOG2(
@@ -158,7 +159,8 @@ def count_salmon_jumps(video_path: str, cfg: SalmonConfig,
         total_area = sum(a for _, _, a in blobs)
         blob_signal.append((frame_idx, total_area))
         if debug_output and blobs:
-            _save_debug_frame(frame, blobs, frame_idx, debug_output)
+            _save_debug_frame(frame, blobs, fg_mask, color_mask,
+                              frame_idx, fps, total_frames, cfg, debug_output)
 
     jump_count, timestamps, _ = count_jumps_from_trajectory(
         blob_signal, fps, cfg)
@@ -173,15 +175,87 @@ def count_salmon_jumps(video_path: str, cfg: SalmonConfig,
     }
 
 
-def _save_debug_frame(frame, blobs, idx, out_dir):
+def _save_debug_frame(frame, blobs, fg_mask, color_mask,
+                      idx, fps, total_frames, cfg: SalmonConfig, out_dir):
+    """
+    Save a rich annotated debug frame with 4 panels:
+      Top-left:     original frame + ROI box + blob circles
+      Top-right:    foreground (motion) mask
+      Bottom-left:  colour mask
+      Bottom-right: combined mask (fg AND colour)
+    A status bar at the bottom shows frame index, timestamp, and blob count.
+    """
     Path(out_dir).mkdir(exist_ok=True)
-    vis = frame.copy()
-    for cx, cy, area in blobs:
-        r = int(np.sqrt(area / np.pi))
-        cv2.circle(vis, (cx, cy), r, (0, 255, 0), 2)
-        cv2.putText(vis, f"area={area:.0f}", (cx - 30, cy - r - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-    cv2.imwrite(f"{out_dir}/frame_{idx:05d}.jpg", vis)
+    FONT = cv2.FONT_HERSHEY_SIMPLEX
+    h, w = frame.shape[:2]
+
+    # ── Panel 1: annotated original ───────────────────────────────────────────
+    p1 = frame.copy()
+
+    # ROI box
+    if cfg.roi:
+        rx, ry, rw, rh = cfg.roi
+        # dim area outside ROI
+        mask = np.zeros((h, w), dtype=np.uint8)
+        mask[ry:ry+rh, rx:rx+rw] = 255
+        dimmed = (p1 * 0.4).astype(np.uint8)
+        p1 = np.where(mask[:, :, None] == 255, p1, dimmed)
+        cv2.rectangle(p1, (rx, ry), (rx+rw, ry+rh), (0, 220, 255), 2)
+        cv2.putText(p1, "ROI", (rx+6, ry+20), FONT, 0.55, (0, 220, 255), 1)
+
+    # Blob circles with area label and blob index
+    for i, (cx, cy, area) in enumerate(blobs):
+        r = max(12, int(np.sqrt(area / np.pi)))
+        cv2.circle(p1, (cx, cy), r, (0, 255, 80), 2)
+        cv2.circle(p1, (cx, cy), 3, (0, 255, 80), -1)
+        cv2.putText(p1, f"#{i} {int(area)}px",
+                    (cx - 32, cy - r - 6), FONT, 0.42, (0, 255, 80), 1)
+
+    cv2.putText(p1, "annotated", (8, 20), FONT, 0.55, (200, 200, 200), 1)
+
+    # ── Panel 2: foreground mask (motion) ────────────────────────────────────
+    p2 = cv2.cvtColor(fg_mask, cv2.COLOR_GRAY2BGR)
+    cv2.putText(p2, "fg mask (motion)", (8, 20), FONT, 0.55, (200, 200, 200), 1)
+
+    # ── Panel 3: colour mask ──────────────────────────────────────────────────
+    p3 = cv2.cvtColor(color_mask, cv2.COLOR_GRAY2BGR)
+    cv2.putText(p3, "colour mask", (8, 20), FONT, 0.55, (200, 200, 200), 1)
+
+    # ── Panel 4: combined mask (fg AND colour) ────────────────────────────────
+    combined = cv2.bitwise_and(fg_mask, color_mask)
+    if cfg.roi:
+        rx, ry, rw, rh = cfg.roi
+        roi_only = np.zeros_like(combined)
+        roi_only[ry:ry+rh, rx:rx+rw] = combined[ry:ry+rh, rx:rx+rw]
+        combined = roi_only
+    p4 = cv2.cvtColor(combined, cv2.COLOR_GRAY2BGR)
+    cv2.putText(p4, "combined (fg & colour & roi)", (8, 20),
+                FONT, 0.55, (200, 200, 200), 1)
+
+    # ── Assemble 2x2 grid ─────────────────────────────────────────────────────
+    ph = h // 2
+    pw = w // 2
+
+    def resize(img):
+        return cv2.resize(img, (pw, ph))
+
+    top    = np.hstack([resize(p1), resize(p2)])
+    bottom = np.hstack([resize(p3), resize(p4)])
+    grid   = np.vstack([top, bottom])
+
+    # ── Status bar ────────────────────────────────────────────────────────────
+    bar_h  = 32
+    bar    = np.zeros((bar_h, pw * 2, 3), dtype=np.uint8)
+    ts_sec = idx / fps
+    total_sec = total_frames / fps
+    status = (f"frame {idx:5d}  |  {ts_sec:.2f}s / {total_sec:.1f}s  |  "
+              f"blobs detected: {len(blobs)}  |  "
+              f"min_area={cfg.min_blob_area}  max_area={cfg.max_blob_area}  "
+              f"roi={cfg.roi}")
+    cv2.putText(bar, status, (8, 22), FONT, 0.42, (180, 180, 180), 1)
+
+    final = np.vstack([grid, bar])
+    cv2.imwrite(f"{out_dir}/frame_{idx:05d}.jpg", final)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
