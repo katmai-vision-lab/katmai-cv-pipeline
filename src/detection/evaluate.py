@@ -114,6 +114,7 @@ def plot_evaluation(df, output_path):
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=150)
+    plt.close()
     print(f"\n✓ Plot saved: {output_path}")
 
 
