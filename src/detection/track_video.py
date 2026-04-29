@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.detection.detector import BearDetector
+from src.detection.trajectory_video import render as render_trajectory_overlay
 from src.config import RAW_DATA_DIR, TRAINED_MODELS_DIR
 
 DEFAULT_MODEL = str(TRAINED_MODELS_DIR / "bear_detector2" / "weights" / "best.pt")
@@ -42,10 +43,26 @@ def main():
                         help="Merge: max frame gap to still connect same bear (default 3600 = 2min @ 30fps)")
     parser.add_argument("--max-dist-px", type=int, default=150,
                         help="Merge: max pixel distance at transition (default 150)")
-    parser.add_argument("--min-duration", type=int, default=30,
-                        help="Filter: drop groups shorter than N frames (default 30)")
+    parser.add_argument("--cooccur-tol-frames", type=int, default=60,
+                        help="Merge: tolerate up to N co-occurrence frames as detection "
+                             "artifact if mean dist < max_dist_px (default 60)")
+    parser.add_argument("--cooccur-artifact-iou", type=float, default=0.3,
+                        help="Merge: if two co-occurring bboxes overlap with mean IoU >= "
+                             "this, treat as same animal regardless of duration (default 0.3)")
+    parser.add_argument("--min-duration", type=int, default=150,
+                        help="Post-merge filter: drop groups shorter than N frames (default 150 = 5s @ 30fps)")
+    parser.add_argument("--min-raw-duration", type=int, default=None,
+                        help="Pre-merge filter: drop raw tracks shorter than N frames "
+                             "BEFORE merge step. Prevents brief detections from being used "
+                             "as merge bridges. Default: same as --min-duration")
     parser.add_argument("--min-mean-conf", type=float, default=0.80,
                         help="Filter: drop groups with mean conf < this (default 0.80)")
+    parser.add_argument("--no-trails", action="store_true",
+                        help="Skip the trajectory-overlay video (default: also produce one)")
+    parser.add_argument("--trail-frames", type=int, default=0,
+                        help="Trail length in frames (0 = full history, default 0)")
+    parser.add_argument("--trail-thickness", type=int, default=3,
+                        help="Trail line thickness in px (default 3)")
 
     args = parser.parse_args()
 
@@ -80,13 +97,38 @@ def main():
         tracker=args.tracker,
         max_gap_frames=args.max_gap_frames,
         max_dist_px=args.max_dist_px,
+        cooccurrence_tolerance_frames=args.cooccur_tol_frames,
+        cooccurrence_artifact_iou=args.cooccur_artifact_iou,
         min_duration=args.min_duration,
+        min_raw_duration=args.min_raw_duration,
         min_mean_conf=args.min_mean_conf,
     )
 
     video_files = list(output_dir.glob("*.mp4")) + list(output_dir.glob("*.avi"))
     if video_files:
         print(f"\n▶ Play output: {video_files[0]}")
+
+    if not args.no_trails:
+        traj_json = output_dir / "trajectories.json"
+        if traj_json.exists():
+            import json as _json
+            with open(traj_json) as _f:
+                _meta = _json.load(_f)
+            total = max(int(_meta.get("total_frames") or 1), 1)
+            cap = args.trail_frames if args.trail_frames > 0 else total
+            print("\n→ Rendering trajectory overlay on raw video...")
+            render_trajectory_overlay(
+                traj_path=traj_json,
+                video_path=video_path,
+                output_path=str(output_dir / "trajectories_overlay.mp4"),
+                trail_frames=cap,
+                thickness=args.trail_thickness,
+                draw_box=True,
+                draw_id=True,
+            )
+        else:
+            print(f"\n(skipped trail overlay — no {traj_json.name})")
+
     return 0
 
 

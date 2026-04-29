@@ -351,17 +351,28 @@ class BearDetector:
         return stats
 
     @staticmethod
-    def _merge_fragmented_tracks(frame_data, max_gap_frames=3600, max_dist_px=150):
+    def _merge_fragmented_tracks(frame_data, max_gap_frames=3600, max_dist_px=150,
+                                  cooccurrence_tolerance_frames=60,
+                                  cooccurrence_artifact_iou=0.3,
+                                  decisions=None):
         """
         Post-process track IDs to merge fragments from the same bear.
 
         A bear that briefly disappears (occlusion, enters water) may lose its track
         and reappear with a new ID. Two tracks are merged when:
-          1. They never appear in the same frame (can't be different bears simultaneously)
-          2. One ends before the other starts (temporally sequential)
+          1. They are not "really" co-occurring (see below)
+          2. One ends before the other starts (temporally sequential, possibly with
+             a brief overlap caused by detection-artifact double-bbox)
           3. The gap between them is within max_gap_frames
           4. The last known position of the earlier track is within max_dist_px of
              the first known position of the later track
+
+        Co-occurrence tolerance: a pair (a, b) is considered "really" co-occurring
+        (i.e. different individuals) only if it appeared in the same frame for at
+        least `cooccurrence_tolerance_frames` frames OR was apart by more than
+        max_dist_px on average during the overlap. Brief & spatially-close
+        co-occurrence is treated as a detection-artifact double bbox of the same
+        animal and tolerated for merge.
 
         Returns (merged_unique_count, {track_id: group_id})
         """
@@ -371,12 +382,28 @@ class BearDetector:
         track_last_frame = {}
         track_first_pos = {}
         track_last_pos = {}
-        co_occurring = set()
+        co_occur_count = defaultdict(int)
+        co_occur_dist_sum = defaultdict(float)
+        co_occur_dist_n = defaultdict(int)
+        co_occur_iou_sum = defaultdict(float)
+        co_occur_iou_n = defaultdict(int)
+
+        def _iou(box_a, box_b):
+            x1 = max(box_a[0], box_b[0])
+            y1 = max(box_a[1], box_b[1])
+            x2 = min(box_a[2], box_b[2])
+            y2 = min(box_a[3], box_b[3])
+            inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+            area_a = max(0.0, box_a[2] - box_a[0]) * max(0.0, box_a[3] - box_a[1])
+            area_b = max(0.0, box_b[2] - box_b[0]) * max(0.0, box_b[3] - box_b[1])
+            union = area_a + area_b - inter
+            return (inter / union) if union > 0 else 0.0
 
         for fd in frame_data:
             frame = fd['frame']
             ids = fd['track_ids']
             positions = fd.get('track_positions', {})
+            boxes = fd.get('track_boxes', {})
 
             for tid in ids:
                 if tid not in track_first_frame:
@@ -390,7 +417,48 @@ class BearDetector:
             for i in range(len(ids)):
                 for j in range(i + 1, len(ids)):
                     a, b = min(ids[i], ids[j]), max(ids[i], ids[j])
-                    co_occurring.add((a, b))
+                    pair = (a, b)
+                    co_occur_count[pair] += 1
+                    if a in positions and b in positions:
+                        ax, ay = positions[a]
+                        bx, by = positions[b]
+                        co_occur_dist_sum[pair] += ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
+                        co_occur_dist_n[pair] += 1
+                    if a in boxes and b in boxes:
+                        co_occur_iou_sum[pair] += _iou(boxes[a], boxes[b])
+                        co_occur_iou_n[pair] += 1
+
+        def cooccur_info(a, b):
+            pair = (min(a, b), max(a, b))
+            n = co_occur_count.get(pair, 0)
+            mean_dist = None
+            mean_iou = None
+            if co_occur_dist_n.get(pair, 0) > 0:
+                mean_dist = co_occur_dist_sum[pair] / co_occur_dist_n[pair]
+            if co_occur_iou_n.get(pair, 0) > 0:
+                mean_iou = co_occur_iou_sum[pair] / co_occur_iou_n[pair]
+            return n, mean_dist, mean_iou
+
+        def is_real_cooccurrence(a, b):
+            """True if (a,b) is genuinely two different individuals. False if it
+            looks like a detection-artifact double-bbox of one animal.
+
+            Tolerated as artifact when ANY of:
+              - bboxes substantially overlap (mean IoU >= cooccurrence_artifact_iou) —
+                strongest signal, regardless of duration
+              - brief co-occurrence (< tolerance) AND spatially close (< max_dist_px)
+            """
+            n, mean_dist, mean_iou = cooccur_info(a, b)
+            if n == 0:
+                return False
+            # IoU signal: bboxes overlap a lot → same animal double-detected
+            if mean_iou is not None and mean_iou >= cooccurrence_artifact_iou:
+                return False
+            # Count + center-distance signal: brief & spatially close → tolerate
+            if n < cooccurrence_tolerance_frames:
+                if mean_dist is not None and mean_dist <= max_dist_px:
+                    return False
+            return True
 
         track_ids = sorted(track_first_frame.keys())
         parent = {tid: tid for tid in track_ids}
@@ -404,11 +472,13 @@ class BearDetector:
             return x
 
         def groups_can_merge(root_a, root_b):
-            """Reject merge if any member of one group co-occurs with any member of the other."""
+            """Reject merge if any member of one group really co-occurs with any
+            member of the other (artifact overlaps are tolerated)."""
             for ma in members[root_a]:
                 for mb in members[root_b]:
-                    pair = (min(ma, mb), max(ma, mb))
-                    if pair in co_occurring:
+                    if ma == mb:
+                        continue
+                    if is_real_cooccurrence(ma, mb):
                         return False
             return True
 
@@ -425,48 +495,108 @@ class BearDetector:
         candidates = []
         for i, a in enumerate(track_ids):
             for b in track_ids[i + 1:]:
-                pair = (min(a, b), max(a, b))
-                if pair in co_occurring:
+                if is_real_cooccurrence(a, b):
+                    if decisions is not None:
+                        n, mean_dist, mean_iou = cooccur_info(a, b)
+                        md = f', mean dist {mean_dist:.1f}px' if mean_dist is not None else ''
+                        mi = f', mean IoU {mean_iou:.2f}' if mean_iou is not None else ''
+                        decisions.append({
+                            'a': a, 'b': b, 'result': 'rejected',
+                            'cooccur_frames': n,
+                            'mean_iou': round(mean_iou, 3) if mean_iou is not None else None,
+                            'reason': f'co-occurred for {n} frames{md}{mi} (different bears)',
+                        })
                     continue
 
+                # Determine temporal ordering. With co-occurrence tolerance, the
+                # ranges may briefly overlap (artifact), so don't require strict
+                # sequentiality — fall back to whichever started first.
                 if track_last_frame[a] < track_first_frame[b]:
                     early, late = a, b
                 elif track_last_frame[b] < track_first_frame[a]:
                     early, late = b, a
+                elif track_first_frame[a] <= track_first_frame[b]:
+                    early, late = a, b
                 else:
-                    continue
+                    early, late = b, a
 
-                gap = track_first_frame[late] - track_last_frame[early]
+                gap = max(track_first_frame[late] - track_last_frame[early], 0)
                 if gap > max_gap_frames:
+                    if decisions is not None:
+                        decisions.append({
+                            'a': early, 'b': late, 'gap': gap, 'result': 'rejected',
+                            'reason': f'gap ({gap}) > max_gap_frames ({max_gap_frames})',
+                        })
                     continue
 
-                if early in track_last_pos and late in track_first_pos:
+                # If they had any tolerated-artifact co-occurrence, the "transition"
+                # distance is between two positions in the same frame, not at a real
+                # gap — skip the dist check (the IoU/proximity check during overlap
+                # already validated they're the same animal).
+                pair_key = (min(a, b), max(a, b))
+                n_overlap = co_occur_count.get(pair_key, 0)
+                if n_overlap > 0:
+                    dist = 0.0
+                elif early in track_last_pos and late in track_first_pos:
                     lx, ly = track_last_pos[early]
                     fx, fy = track_first_pos[late]
                     dist = ((lx - fx) ** 2 + (ly - fy) ** 2) ** 0.5
                     if dist > max_dist_px:
+                        if decisions is not None:
+                            decisions.append({
+                                'a': early, 'b': late, 'gap': gap,
+                                'dist_px': round(dist, 1), 'result': 'rejected',
+                                'reason': f'dist_px ({dist:.1f}) > max_dist_px ({max_dist_px})',
+                            })
                         continue
                 else:
                     dist = max_dist_px
 
-                candidates.append((gap, dist, a, b))
+                candidates.append((gap, dist, early, late))
 
         candidates.sort()  # prefer smallest gap, then smallest dist
 
         for _gap, _dist, a, b in candidates:
             ra, rb = find(a), find(b)
             if ra == rb:
+                if decisions is not None:
+                    decisions.append({
+                        'a': a, 'b': b, 'gap': _gap, 'dist_px': round(_dist, 1),
+                        'result': 'redundant',
+                        'reason': 'already in same group via earlier merge',
+                    })
                 continue
             if not groups_can_merge(ra, rb):
+                if decisions is not None:
+                    decisions.append({
+                        'a': a, 'b': b, 'gap': _gap, 'dist_px': round(_dist, 1),
+                        'result': 'rejected',
+                        'reason': 'transitive co-occurrence with another raw ID in same group',
+                    })
                 continue
+            if decisions is not None:
+                n_overlap, _, mean_iou = cooccur_info(a, b)
+                tol_parts = []
+                if n_overlap > 0:
+                    tol_parts.append(f'tolerated {n_overlap}f overlap')
+                if mean_iou is not None and mean_iou > 0:
+                    tol_parts.append(f'mean IoU {mean_iou:.2f}')
+                tol_note = f' ({", ".join(tol_parts)})' if tol_parts else ''
+                decisions.append({
+                    'a': a, 'b': b, 'gap': _gap, 'dist_px': round(_dist, 1),
+                    'cooccur_frames': n_overlap,
+                    'mean_iou': round(mean_iou, 3) if mean_iou is not None else None,
+                    'result': 'merged',
+                    'reason': f'gap={_gap}f, dist={_dist:.1f}px{tol_note}',
+                })
             union(a, b)
 
         groups = set(find(tid) for tid in track_ids)
         return len(groups), {tid: find(tid) for tid in track_ids}
 
     @staticmethod
-    def _filter_spurious_groups(frame_data, id_map, min_duration=30, min_mean_conf=0.80,
-                                long_duration=500):
+    def _filter_spurious_groups(frame_data, id_map, min_duration=150, min_mean_conf=0.80,
+                                long_duration=500, drop_log=None):
         """
         Drop groups that look like noise. Compound rule:
           - duration < min_duration → always drop (too short to be real).
@@ -501,8 +631,19 @@ class BearDetector:
             mean_conf = (sum(confs_list) / len(confs_list)) if confs_list else 0.0
             if duration < min_duration:
                 dropped.add(root)
+                if drop_log is not None:
+                    drop_log[root] = {
+                        'duration': duration, 'mean_conf': round(mean_conf, 3),
+                        'reason': f'duration ({duration}) < min_duration ({min_duration})',
+                    }
             elif duration < long_duration and mean_conf < min_mean_conf:
                 dropped.add(root)
+                if drop_log is not None:
+                    drop_log[root] = {
+                        'duration': duration, 'mean_conf': round(mean_conf, 3),
+                        'reason': (f'duration ({duration}) < long_duration ({long_duration}) '
+                                   f'and mean_conf ({mean_conf:.3f}) < min_mean_conf ({min_mean_conf})'),
+                    }
 
         kept = {tid: root for tid, root in id_map.items() if root not in dropped}
         return kept, dropped
@@ -510,7 +651,10 @@ class BearDetector:
     def track_and_save_video(self, video_path, output_name=None, conf=0.25,
                              frame_skip=1, classes=None, tracker='bytetrack',
                              max_gap_frames=3600, max_dist_px=150,
-                             min_duration=30, min_mean_conf=0.80, **kwargs):
+                             cooccurrence_tolerance_frames=60,
+                             cooccurrence_artifact_iou=0.3,
+                             min_duration=150, min_mean_conf=0.80,
+                             min_raw_duration=None, **kwargs):
         """
         Track bears in a video and save an output video with bounding boxes and track IDs
         overlaid. Track IDs are post-processed with _merge_fragmented_tracks so that bears
@@ -571,6 +715,7 @@ class BearDetector:
             track_confs = {}
             box_data = {}
 
+            track_boxes = {}
             if boxes.id is not None:
                 track_ids = boxes.id.cpu().numpy().astype(int).tolist()
                 xyxy = boxes.xyxy.cpu().numpy()
@@ -580,6 +725,10 @@ class BearDetector:
                 for i, tid in enumerate(track_ids):
                     track_positions[tid] = (float(xywh[i][0]), float(xywh[i][1]))
                     track_confs[tid] = float(confs[i])
+                    track_boxes[tid] = (
+                        float(xyxy[i][0]), float(xyxy[i][1]),
+                        float(xyxy[i][2]), float(xyxy[i][3]),
+                    )
                     box_data[tid] = (
                         int(xyxy[i][0]), int(xyxy[i][1]),
                         int(xyxy[i][2]), int(xyxy[i][3]),
@@ -591,16 +740,60 @@ class BearDetector:
                 'track_ids': track_ids,
                 'track_positions': track_positions,
                 'track_confs': track_confs,
+                'track_boxes': track_boxes,
             })
             frame_boxes.append(box_data)
 
+        # --- Pre-merge filter: drop raw tracks that, on their own, are shorter
+        # than min_raw_duration. This prevents brief detections from being used
+        # as merge "bridges" that pull short fragments into long-lived bears.
+        if min_raw_duration is None:
+            min_raw_duration = min_duration
+        pre_merge_dropped = {}
+        if min_raw_duration > 0:
+            raw_first = {}
+            raw_last = {}
+            for fd in frame_data:
+                for tid in fd['track_ids']:
+                    if tid not in raw_first:
+                        raw_first[tid] = fd['frame']
+                    raw_last[tid] = fd['frame']
+            short_raws = {tid for tid in raw_first
+                          if raw_last[tid] - raw_first[tid] + 1 < min_raw_duration}
+            for tid in short_raws:
+                pre_merge_dropped[tid] = {
+                    'first_frame': raw_first[tid],
+                    'last_frame': raw_last[tid],
+                    'duration': raw_last[tid] - raw_first[tid] + 1,
+                    'reason': f'duration < min_raw_duration ({min_raw_duration})',
+                }
+            for fd in frame_data:
+                fd['track_ids'] = [t for t in fd['track_ids'] if t not in short_raws]
+                for key in ('track_positions', 'track_confs', 'track_boxes'):
+                    if key in fd:
+                        fd[key] = {t: v for t, v in fd[key].items() if t not in short_raws}
+            for box_data in frame_boxes:
+                for tid in list(box_data.keys()):
+                    if tid in short_raws:
+                        del box_data[tid]
+            if pre_merge_dropped:
+                print(f"   Pre-merge filter dropped {len(pre_merge_dropped)} raw track(s) "
+                      f"shorter than {min_raw_duration} frames")
+
         # --- Merge fragmented track IDs ---
-        _, id_map = self._merge_fragmented_tracks(
-            frame_data, max_gap_frames=max_gap_frames, max_dist_px=max_dist_px
+        merge_decisions = []
+        _, id_map_pre_filter = self._merge_fragmented_tracks(
+            frame_data, max_gap_frames=max_gap_frames, max_dist_px=max_dist_px,
+            cooccurrence_tolerance_frames=cooccurrence_tolerance_frames,
+            cooccurrence_artifact_iou=cooccurrence_artifact_iou,
+            decisions=merge_decisions,
         )
         # --- Filter spurious (short or low-confidence) groups ---
+        filter_drop_log = {}
         id_map, dropped = self._filter_spurious_groups(
-            frame_data, id_map, min_duration=min_duration, min_mean_conf=min_mean_conf
+            frame_data, id_map_pre_filter,
+            min_duration=min_duration, min_mean_conf=min_mean_conf,
+            drop_log=filter_drop_log,
         )
         if dropped:
             print(f"   Dropped {len(dropped)} spurious track group(s) "
@@ -665,6 +858,138 @@ class BearDetector:
 
         cap.release()
         writer.release()
+
+        # --- Export per-bear trajectories as JSON ---
+        from collections import defaultdict
+        raw_to_display = {
+            raw: group_to_display[root] for raw, root in id_map.items() if root in group_to_display
+        }
+        display_to_raws = defaultdict(list)
+        for raw, disp in raw_to_display.items():
+            display_to_raws[disp].append(raw)
+
+        bear_trajectories = defaultdict(list)
+        for frame_idx, box_data in enumerate(frame_boxes):
+            for raw_id, (x1, y1, x2, y2, conf_score) in box_data.items():
+                disp = raw_to_display.get(raw_id)
+                if disp is None:
+                    continue
+                w = x2 - x1
+                h = y2 - y1
+                bear_trajectories[disp].append({
+                    'frame': frame_idx,
+                    'cx': round(x1 + w / 2, 1),
+                    'cy': round(y1 + h / 2, 1),
+                    'w': w,
+                    'h': h,
+                    'conf': round(conf_score, 3),
+                    'raw_id': raw_id,
+                })
+
+        trajectory_payload = {
+            'video': video_path.name,
+            'total_frames': len(frame_boxes),
+            'fps': src_fps,
+            'bears': {
+                f'bear_{disp}': {
+                    'raw_track_ids': sorted(display_to_raws[disp]),
+                    'num_detections': len(bear_trajectories[disp]),
+                    'first_frame': bear_trajectories[disp][0]['frame'] if bear_trajectories[disp] else None,
+                    'last_frame': bear_trajectories[disp][-1]['frame'] if bear_trajectories[disp] else None,
+                    'trajectory': bear_trajectories[disp],
+                }
+                for disp in sorted(bear_trajectories.keys())
+            },
+        }
+        trajectory_path = output_dir / 'trajectories.json'
+        with open(trajectory_path, 'w') as f:
+            json.dump(trajectory_payload, f, indent=2)
+        print(f"   Saved trajectories: {trajectory_path}")
+
+        # --- Export merge decision report ---
+        track_first = {}
+        track_last = {}
+        track_confs_acc = defaultdict(list)
+        for fd in frame_data:
+            for tid in fd['track_ids']:
+                if tid not in track_first:
+                    track_first[tid] = fd['frame']
+                track_last[tid] = fd['frame']
+                if tid in fd.get('track_confs', {}):
+                    track_confs_acc[tid].append(fd['track_confs'][tid])
+
+        def _bear_label_for(raw_id):
+            disp = raw_to_display.get(raw_id)
+            if disp is not None:
+                return f'Bear {disp}'
+            root = id_map_pre_filter.get(raw_id)
+            if root in dropped:
+                return 'dropped (filtered)'
+            return None
+
+        raw_tracks_report = {}
+        for tid in sorted(track_first.keys()):
+            confs = track_confs_acc.get(tid, [])
+            raw_tracks_report[str(tid)] = {
+                'first_frame': track_first[tid],
+                'last_frame': track_last[tid],
+                'duration': track_last[tid] - track_first[tid] + 1,
+                'mean_conf': round(sum(confs) / len(confs), 3) if confs else 0.0,
+                'final_bear': _bear_label_for(tid),
+            }
+
+        # Per-bear merge chain: only the accepted merges that built each final group.
+        groups_pre_filter = defaultdict(list)
+        for raw, root in id_map_pre_filter.items():
+            groups_pre_filter[root].append(raw)
+        bear_merge_chain = {}
+        for disp in sorted(display_to_raws.keys()):
+            members = set(display_to_raws[disp])
+            chain = [
+                {'from': d['a'], 'to': d['b'],
+                 'gap': d.get('gap'), 'dist_px': d.get('dist_px')}
+                for d in merge_decisions
+                if d['result'] == 'merged' and d['a'] in members and d['b'] in members
+            ]
+            bear_merge_chain[f'Bear {disp}'] = {
+                'raw_ids': sorted(display_to_raws[disp]),
+                'merge_chain': chain,
+            }
+
+        filtered_groups_report = {}
+        for root, info in filter_drop_log.items():
+            filtered_groups_report[str(root)] = {
+                'raw_ids': sorted(groups_pre_filter.get(root, [])),
+                **info,
+            }
+
+        merge_report = {
+            'params': {
+                'max_gap_frames': max_gap_frames,
+                'max_dist_px': max_dist_px,
+                'cooccurrence_tolerance_frames': cooccurrence_tolerance_frames,
+                'cooccurrence_artifact_iou': cooccurrence_artifact_iou,
+                'min_raw_duration': min_raw_duration,
+                'min_duration': min_duration,
+                'min_mean_conf': min_mean_conf,
+            },
+            'summary': {
+                'raw_track_count': len(track_first),
+                'final_bear_count': len(display_to_raws),
+                'filtered_group_count': len(filter_drop_log),
+                'merged_pairs': sum(1 for d in merge_decisions if d['result'] == 'merged'),
+                'rejected_pairs': sum(1 for d in merge_decisions if d['result'] == 'rejected'),
+            },
+            'raw_tracks': raw_tracks_report,
+            'final_bears': bear_merge_chain,
+            'pre_merge_dropped_raws': {str(k): v for k, v in pre_merge_dropped.items()},
+            'filtered_groups': filtered_groups_report,
+            'decisions': merge_decisions,
+        }
+        report_path = output_dir / 'merge_report.json'
+        with open(report_path, 'w') as f:
+            json.dump(merge_report, f, indent=2, default=make_json_safe)
+        print(f"   Saved merge report: {report_path}")
 
         # Convert AVI to MP4 for better browser streaming
         out_video = avi_path
