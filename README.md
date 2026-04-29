@@ -238,7 +238,7 @@ python3 -m src.detection.bear_count \
 
 OutPut the Bytetrack video
 ```
-python -m src.detection.track_video   --video "bears/2025-09-19 23-30-11_Brooks_Falls_Low_5_bears.mp4"   --model models/trained/bear_detector3/weights/best.pt   --classes 0   --conf 0.7   --frame-skip 1
+python -m src.detection.track_video   --video "bears/2025-09-21 00-03-46_Brooks_Falls_multibear_walkabout_closeups_distant_test_pt1.mp4"   --model models/trained/bear_detector3/weights/best.pt   --classes 0   --conf 0.7   --frame-skip 1 --min-duration 300
 ```
 
 ## Salmon Jump
