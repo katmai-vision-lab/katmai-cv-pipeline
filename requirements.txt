@@ -30,3 +30,8 @@ lightning>=2.0.0               # Required for MegaDetector
 PytorchWildlife>=1.0.0         # Required for MegaDetector v5
 
 einops
+rich>=13.0.0            # TUI panels, tables, prompts (src/cli.py); also a transitive dep of ultralytics
+
+# Environmental data correlation - src/environment/
+pymediainfo>=5.1.0      # Video metadata extraction; bundles libmediainfo in the wheel (no system install needed)
+mutagen>=1.47.0         # Pure-Python MP4 tag reader (GPS, datetime, make/model atoms)

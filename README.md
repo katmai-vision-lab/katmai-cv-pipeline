@@ -612,7 +612,105 @@ python3 -m src.detection.bear_count \
 OutPut the Bytetrack video
 ```
 python -m src.detection.track_video   --video "bears/2025-09-19 23-30-11_Brooks_Falls_Low_5_bears.mp4"   --model models/trained/bear_detector3/weights/best.pt   --classes 0   --conf 0.7   --frame-skip 1
+
+# Multi-bear walkabout example with min-duration filter
+python -m src.detection.track_video   --video "bears/2025-09-21 00-03-46_Brooks_Falls_multibear_walkabout_closeups_distant_test_pt1.mp4"   --model models/trained/bear_detector3/weights/best.pt   --classes 0   --conf 0.7   --frame-skip 1 --min-duration 300
 ```
+
+## Salmon Jump
+
+### Usage of salmon_jump_counter_cv.py
+```bash
+# Basic — uses defaults only
+python salmon_jump_counter_cv.py video.mov
+
+# Load your saved config
+python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov --config configs/salmon/config.json
+
+# Override just the ROI for a new video, keep everything else from config
+python salmon_jump_counter_cv.py video2.mov --config config.json --roi 100 200 400 300
+
+# Disable ROI entirely
+python salmon_jump_counter_cv.py video.mov --config config.json --no-roi
+
+# Tune blob sizes and gap without editing any file
+python salmon_jump_counter_cv.py video.mov --min-blob-area 600 --max-blob-area 5000 --min-jump-gap-sec 1.0
+
+# Try new HSV values on a different video
+python salmon_jump_counter_cv.py ocean_video.mov --salmon-hsv-lower 5 40 60 --salmon-hsv-upper 25 255 255
+
+# Once happy with a combination, save it as a new config for that environment
+python salmon_jump_counter_cv.py video.mov --roi 0 400 1280 300 --min-blob-area 500 --save-config river_config.json
+```
+
+### Visualization script usage
+```bash
+# Simplest — ROI comes automatically from the embedded config in result.json
+python visualize_jumps.py video.mov result.json
+
+# Override ROI for a different crop
+python visualize_jumps.py video.mov result.json --roi 100 400 500 300
+
+# Use a specific config.json as the ROI source
+python visualize_jumps.py video.mov result.json --config river_config.json
+
+# Strip the ROI overlay off the output video
+python visualize_jumps.py video.mov result.json --no-show-roi
+
+# Custom output path
+python visualize_jumps.py video.mov result.json --output review/jump9_annotated.mp4
+```
+
+**Explaination**
+
+Each debug frame now saves as a 2×2 grid plus a status bar at the bottom:
+```bash
+┌─────────────────────┬─────────────────────┐
+│  annotated original │   fg mask (motion)  │
+│  ROI dim + cyan box │   white = movement  │
+│  green blob circles │                     │
+├─────────────────────┼─────────────────────┤
+│   colour mask       │  combined mask      │
+│   white = salmon    │  fg AND colour      │
+│   HSV range hit     │  AND ROI applied    │
+└─────────────────────┴─────────────────────┘
+│frame 00438 | 7.30s / 15.4s | blobs: 2 | min_area=800 max_area=8000 roi=[491,731,235,307] │
+```
+
+### Full pipeline
+```bash
+python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov --config configs/salmon/config.json > predictions/result.json --debug ./debug_frames/
+
+python src/detection/salmons/visualize_salmon_jumps.py data/raw/salmons/salmon_jump_9.mov predictions/result.json
+```
+
+<!-- ### Extract one frame for calibration
+python -c "
+import cv2
+cap = cv2.VideoCapture('data/raw/salmons/salmon_jump_2.mkv')
+cap.set(cv2.CAP_PROP_POS_FRAMES, 100)
+_, frame = cap.read()
+cv2.imwrite('calibration_frame.jpg', frame)
+cap.release()
+"
+
+Debug mode
+```python
+python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov ./debug_salmon_frames/ > predictions/result.json
+```
+
+Save your result to a file first.
+```python
+python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov > predictions/result.json
+```
+Then render.
+```python
+python src/detection/salmons/visualize_salmon_jumps.py data/raw/salmons/salmon_jump_9.mov predictions/result.json
+``` -->
+
+### Parameters
+![alt text](/docs/images/salmon-params.png)
+
 ## Useful Link
-SharePoint:
+SharePoint:s
 https://uwnetid.sharepoint.com/sites/katmai-vision-lab/Shared%20Documents/Forms/AllItems.aspx
