@@ -1,5 +1,19 @@
 # Computer Vision Pipeline to Detect, Track & Quantify Feeding Habits of Katmai NPP Alaskan Brown Bears
+
+> 📘 **End-user guide for behavior + identity modules:** [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — covers the three new modules (Molmo2 behavior classification, pixel-based detection research, PoseSwin cross-video bear identity) plus how to bring your own VLM backend and your own bear photos.
+
 This project focuses on building an open-source, Python-based computer vision pipeline that analyzes video data from Katmai National Park & Preserve. The system is designed to automatically detect and track individual Alaskan brown bears, count salmon attempting to jump Brooks Falls, and quantify feeding behavior over time. In addition to visual analysis, the pipeline will integrate environmental context such as water level, stream flow, weather, and time of day to support deeper ecological insight.
+
+## Project modules
+
+| Module | Status | Documentation |
+|---|---|---|
+| **Auto-annotation** (Grounding DINO + DETR + MegaDetector consensus) | ✅ Production | This README (below) + [`docs/SALMON_DETECTION_GUIDE.md`](docs/SALMON_DETECTION_GUIDE.md) |
+| **Bear detection + tracking** (YOLOv8 + ByteTrack) | ✅ Production | This README (below) |
+| **Bear behavior classification** (Molmo2 / OpenAI / Claude / Gemini — pluggable backends) | ✅ Production | [`docs/USER_GUIDE.md § Module 1`](docs/USER_GUIDE.md#module-1-behavior-classification) |
+| **Pixel-based eating detection** (HSV color + posture) | ⚠️ Research artifact | [`docs/pixel_detection_attempts_report.md`](docs/pixel_detection_attempts_report.md) |
+| **Cross-video bear identity** (PoseSwin face Re-ID) | ✅ Production | [`docs/USER_GUIDE.md § Module 3`](docs/USER_GUIDE.md#module-3-cross-video-bear-identity) + [`docs/bear_identity_pipeline.md`](docs/bear_identity_pipeline.md) |
+
 
 Video data is sourced primarily from Explore.org bear cams in the Brooks Falls and Brooks River region.
 

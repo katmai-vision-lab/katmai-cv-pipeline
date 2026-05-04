@@ -19,3 +19,4 @@ match_thresh: 0.7
 # Optional settings
 min_box_area: 10         # Minimum bounding box area
 mot20: False             # MOT20 dataset format
+fuse_score: True         # Required by ultralytics tracker — fuses conf with IoU
