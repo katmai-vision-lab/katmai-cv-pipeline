@@ -1,61 +1,61 @@
-# 棕熊身份识别流水线 — 技术文档
+# Brown Bear Identity Pipeline — Technical Document
 
-**作者：** Darian Ding
-**日期：** 2026 年 5 月 4 日
-**目标读者：** 团队成员、技术 mentor、未来维护者
-**对应代码分支：** `feature/auto-annotation`
+**Author:** Darian Ding
+**Date:** May 4, 2026
+**Audience:** team members, technical mentors, future maintainers
+**Code branch:** `feature/auto-annotation`
 
 ---
 
-## 1. 项目背景
+## 1. Project background
 
-### 1.1 动机
+### 1.1 Motivation
 
-Winter Quarter 的设计报告中，"跨视频识别同一头熊"（cross-video bear identification）这项需求由于 ByteTrack 仅做帧间运动学跟踪、没有外观特征 Re-ID 网络，被从项目范围中移除。直接结果是：
+In the Winter Quarter design report, the requirement "identify the same bear across videos" (cross-video bear identification) was descoped because ByteTrack only does motion-based per-frame association — there is no appearance-feature Re-ID network. The direct consequences:
 
-- 每段视频里的熊都被重新编号为 `Bear 1, Bear 2, ...`
-- 同一只熊在 5 段视频里可能被记成 5 个不同的 ID
-- 无法回答"Otis 这只熊一共吃了多少条三文鱼"这种**种群级**生态学问题
+- Each video numbers its bears starting from 1 again (`Bear 1, Bear 2, ...`)
+- The same physical bear in 5 videos gets 5 different IDs
+- Population-level questions like "how many salmon did Otis eat in total" cannot be answered
 
-2026 年 2 月，EPFL Mathis Lab 与阿拉斯加 Pacific 大学联合发表了 **PoseSwin** 论文（Rosenberg et al., *Current Biology*），首次开源了一个针对阿拉斯加沿海棕熊的个体识别（Re-ID）模型。Alex 把论文链接转给了我们，问能否集成。
+In February 2026, the EPFL Mathis Lab and Alaska Pacific University co-published the **PoseSwin** paper (Rosenberg et al., *Current Biology*) — the first open-source individual-identification (Re-ID) model for Alaskan coastal brown bears. Alex forwarded the paper and asked whether we could integrate it.
 
-### 1.2 设计目标
+### 1.2 Design goals
 
-1. **跨视频持久化**：同一只物理熊在不同视频里得到同一个标签
-2. **真实姓名**：不只是匿名 `Bear A/B/C`，而是输出"Plunger"、"Bony_Butt"这种社区已知的熊名
-3. **不破坏现有流水线**：把 identity 作为 **add-on** 接入 `analyze_feeding.py` + `feeding_viewer.py`，不改它们的核心逻辑
-4. **不依赖云端**：模型和 gallery 都在本地存储，跑一次推理后离线可用
+1. **Persistence across videos**: the same physical bear gets the same label in different videos
+2. **Real names**: not just anonymous `Bear A/B/C` but well-known names like `Plunger`, `Bony_Butt`
+3. **Don't break the existing pipeline**: identity is an **add-on** to `analyze_feeding.py` + `feeding_viewer.py`, leaving their core logic untouched
+4. **Don't depend on the cloud**: model and gallery live on disk; once an inference run is done, everything works offline
 
-### 1.3 整体策略
+### 1.3 Overall strategy
 
 ```
 ┌─────────────┐  ┌──────────────┐  ┌───────────────┐  ┌──────────────────┐
 │ YOLOv8n     │  │ Molmo2-8B    │  │ Faster-RCNN   │  │ PoseSwin         │
-│ + ByteTrack │  │ (行为分类)    │  │ (熊脸检测)     │  │ (身份embedding)  │
+│ + ByteTrack │  │ (behavior)   │  │ (face det.)   │  │ (identity emb.)  │
 └──────┬──────┘  └──────┬───────┘  └───────┬───────┘  └────────┬─────────┘
        │ bbox+ID         │ behavior         │ head bbox          │ 512-d embed
        └─────────┬───────┴───────┬──────────┴────────┬───────────┘
                  │               │                   │
                  ▼               ▼                   ▼
-              analysis.json  →  id_mapping.json  →  Gallery (持久 JSON)
+              analysis.json  →  id_mapping.json  →  Gallery (persistent JSON)
                           │                          │
                           └──────────┬───────────────┘
                                      ▼
-                              feeding_viewer 渲染
-                              "Plunger [CATCHING] ..."
+                            feeding_viewer rendering
+                            "Plunger [CATCHING] ..."
 ```
 
 ---
 
-## 2. 模块拆解
+## 2. Module breakdown
 
-### 2.1 `PoseSwinIdentifier` —— 模型封装
+### 2.1 `PoseSwinIdentifier` — model wrapper
 
-**文件：** [`src/identity/poseswin_identifier.py`](../src/identity/poseswin_identifier.py)
+**File:** [`src/identity/poseswin_identifier.py`](../src/identity/poseswin_identifier.py)
 
-封装 EPFL 训练的 Pose-Aware Swin Transformer Re-ID 模型。
+Wraps the EPFL-trained pose-aware Swin Transformer Re-ID model.
 
-**核心 API：**
+**Core API:**
 
 ```python
 identifier = PoseSwinIdentifier(device="cuda:0")
@@ -63,82 +63,82 @@ emb_512d = identifier.embed(head_crop_bgr)          # (512,) L2-normalized
 embs     = identifier.embed_batch(list_of_crops)    # (N, 512) batched
 ```
 
-**关键实现细节：**
+**Key implementation details:**
 
-1. **Swin-Base + 自定义投影头**：
-   - Backbone：`embed_dim=128, depths=[2,2,18,2], num_heads=[4,8,16,32]`（标准 Swin-Base）
-   - Pose 集成：HRNet-W48 输出 13 个面部关键点，逐 stage 注入到 Swin（参见原论文 Section 3.2）
-   - 输出投影：1024 → 512
+1. **Swin-Base + custom projection head**:
+   - Backbone: `embed_dim=128, depths=[2,2,18,2], num_heads=[4,8,16,32]` (standard Swin-Base)
+   - Pose integration: HRNet-W48 produces 13 facial keypoints, injected stage-by-stage into Swin (see paper §3.2)
+   - Output projection: 1024 → 512
 
-2. **配置覆盖**：原仓库 YAML (`swin_base_patch4_window7_224_22k.yaml`) 里 `EMBED_DIM=512` 是错的，必须显式覆写为 `128`，否则与 checkpoint shape 不匹配。
+2. **Config override**: the upstream YAML (`swin_base_patch4_window7_224_22k.yaml`) ships with `EMBED_DIM=512`, which is wrong; we explicitly override it to `128` or the checkpoint shape doesn't match.
 
-3. **L2 归一化**：所有 embedding 出去前都归一化到单位长度，让 cosine similarity 等于 dot product，简化下游对比。
+3. **L2 normalization**: every embedding leaving the wrapper is normalized to unit length so cosine similarity equals dot product downstream.
 
-### 2.2 `BearFaceDetector` —— Faster-RCNN 头部检测
+### 2.2 `BearFaceDetector` — Faster-RCNN head detection
 
-**文件：** [`src/identity/face_detector.py`](../src/identity/face_detector.py)
+**File:** [`src/identity/face_detector.py`](../src/identity/face_detector.py)
 
-将原仓库的 mmdetection 2.x Faster-RCNN（`latest.pth`，330 MB）**转换并加载到 torchvision 的 FasterRCNN**，避开 mmdet 2.x + mmcv 1.3.17 与 PyTorch 2.6 的兼容性地狱。
+Converts the upstream mmdetection 2.x Faster-RCNN (`latest.pth`, 330 MB) **and loads it into torchvision's FasterRCNN**, sidestepping the mmdet 2.x + mmcv 1.3.17 vs PyTorch 2.6 compatibility hell.
 
-**为什么要转换而不是装 mmdet？**
+**Why convert instead of installing mmdet?**
 
-- mmdet 2.22 / mmcv 1.3.17 是 2021 年代的库，与 CUDA 12.4 + PyTorch 2.6 有多重 ABI 冲突
-- 装 mmdet 会拖入约 2 GB 的依赖（mmcv-full, mmengine 等）
-- Faster-RCNN 架构在两个框架下**完全相同**（同 ResNet-50 backbone、同 FPN、同 anchor 配置）
-- 唯一差异是命名约定和少量约定（如类索引顺序）
+- mmdet 2.22 / mmcv 1.3.17 is from 2021, and has multiple ABI conflicts with CUDA 12.4 + PyTorch 2.6
+- Installing mmdet pulls in roughly 2 GB of dependencies (mmcv-full, mmengine, etc.)
+- The Faster-RCNN architecture is **identical** in both frameworks (same ResNet-50 backbone, same FPN, same anchor config)
+- The only real differences are naming conventions and a couple of conventions (e.g. class-index ordering)
 
-**权重转换映射（核心）：**
+**Weight conversion mapping (the core of it):**
 
-| mmdet 2.x 命名 | torchvision 命名 | 备注 |
+| mmdet 2.x name | torchvision name | Note |
 |---|---|---|
-| `backbone.{conv1,bn1,layer1-4}.*` | `backbone.body.{conv1,bn1,layer1-4}.*` | 加 `body.` 前缀 |
-| `neck.lateral_convs.{i}.conv.*` | `backbone.fpn.inner_blocks.{i}.0.*` | torchvision 用 `Conv2dNormActivation` 包了一层 |
-| `neck.fpn_convs.{0..3}.conv.*` | `backbone.fpn.layer_blocks.{i}.0.*` | 同上 |
-| `neck.fpn_convs.4.*` | *（丢弃）* | torchvision 用无参 `LastLevelMaxPool` 生成 P6 |
-| `rpn_head.rpn_conv.*` | `rpn.head.conv.0.0.*` | torchvision RPN head 也是 wrapped |
-| `rpn_head.rpn_cls.*` | `rpn.head.cls_logits.*` | 直接搬 |
-| `rpn_head.rpn_reg.*` | `rpn.head.bbox_pred.*` | 直接搬 |
-| `roi_head.bbox_head.shared_fcs.{0,1}.*` | `roi_heads.box_head.fc{6,7}.*` | 重命名 |
-| `roi_head.bbox_head.fc_cls.*` | `roi_heads.box_predictor.cls_score.*` | **必须 swap rows 0/1**（见下） |
-| `roi_head.bbox_head.fc_reg.*` | `roi_heads.box_predictor.bbox_pred.*` | **shape (4,) → (8,)，仅填 bear_head 槽** |
+| `backbone.{conv1,bn1,layer1-4}.*` | `backbone.body.{conv1,bn1,layer1-4}.*` | prefix `body.` |
+| `neck.lateral_convs.{i}.conv.*` | `backbone.fpn.inner_blocks.{i}.0.*` | torchvision wraps in `Conv2dNormActivation` |
+| `neck.fpn_convs.{0..3}.conv.*` | `backbone.fpn.layer_blocks.{i}.0.*` | same |
+| `neck.fpn_convs.4.*` | *(dropped)* | torchvision uses parameterless `LastLevelMaxPool` to produce P6 |
+| `rpn_head.rpn_conv.*` | `rpn.head.conv.0.0.*` | torchvision RPN head is also wrapped |
+| `rpn_head.rpn_cls.*` | `rpn.head.cls_logits.*` | direct copy |
+| `rpn_head.rpn_reg.*` | `rpn.head.bbox_pred.*` | direct copy |
+| `roi_head.bbox_head.shared_fcs.{0,1}.*` | `roi_heads.box_head.fc{6,7}.*` | rename |
+| `roi_head.bbox_head.fc_cls.*` | `roi_heads.box_predictor.cls_score.*` | **must swap rows 0/1** (see below) |
+| `roi_head.bbox_head.fc_reg.*` | `roi_heads.box_predictor.bbox_pred.*` | **shape (4,) → (8,), only fill the bear-head slot** |
 
-**两个 critical gotchas：**
+**Two critical gotchas:**
 
-1. **类索引约定相反**
-   - mmdet 2.x：`cls_score` row 0 = bear_head，row 1 = background
-   - torchvision：`cls_score` row 0 = background，row 1 = bear_head
-   - 不 swap 直接加载会导致**所有 proposal 都被分类为前景**（score = 1.000，100 个假阳性）
+1. **Class-index convention is reversed**
+   - mmdet 2.x: `cls_score` row 0 = bear_head, row 1 = background
+   - torchvision: `cls_score` row 0 = background, row 1 = bear_head
+   - Loading without a row swap classifies **everything as foreground** (every proposal scores 1.000, you get 100 false positives)
 
-2. **回归头维度差**
-   - mmdet 我们的配置是 `reg_class_agnostic=True` → `fc_reg.weight: (4, 1024)`，单一 bbox-delta 输出
-   - torchvision 强制 class-specific → `bbox_pred.weight: (8, 1024)`，每类一组
-   - 转换：bg 槽位置零（推理时 bg 类被过滤），bear_head 槽位填 mmdet 的 4 个权重
+2. **Regression-head dimension mismatch**
+   - Our mmdet config has `reg_class_agnostic=True` → `fc_reg.weight: (4, 1024)`, a single bbox-delta head
+   - torchvision forces class-specific regression → `bbox_pred.weight: (8, 1024)`, one set per class
+   - Conversion: zero out the bg slot (filtered at inference anyway), fill the bear_head slot with the mmdet weights
 
-**调试经验**：转换 bug 表现为"100 个假检测，score 全部 1.000"。debug 方法是 hook `roi_heads.box_predictor` 的 forward 看 raw cls logits — 如果 bg logit 普遍很负、fg logit 普遍很正，就是类索引反了。
+**Debug experience**: the conversion bug looks like "100 fake detections, every score = 1.000". Debug by hooking `roi_heads.box_predictor`'s forward pass and inspecting the raw cls logits — if the bg logits are uniformly very negative and the fg logits uniformly very positive, the class indices are swapped.
 
-**推理 API：**
+**Inference API:**
 
 ```python
 detector = BearFaceDetector(device="cuda:0", score_threshold=0.3)
 heads = detector(frame_bgr)              # [(x1,y1,x2,y2,score), ...]
-best  = detector.best_head_crop(frame)   # 取 score 最高的 head crop（带 padding）
+best  = detector.best_head_crop(frame)   # take the highest-scoring head crop, with padding
 ```
 
-### 2.3 `Gallery` —— 持久化 embedding 库
+### 2.3 `Gallery` — persistent embedding store
 
-**文件：** `src/identity/poseswin_identifier.py` 内的 `Gallery` 类
+**File:** the `Gallery` class in `src/identity/poseswin_identifier.py`
 
-JSON-序列化的 `name → embedding` 数据结构，支持：
+JSON-serialized `name → embedding` data structure. Supports:
 
 ```python
 gallery = Gallery.load("data/identity/named_bear_gallery.json")
-name, sim = gallery.match(query_emb, threshold=0.6)  # 返回最近邻
-gallery.add_anonymous(query_emb)                     # 自动命名 "Bear A/B/C/..."
-gallery.reinforce(name, query_emb)                   # 给已知熊加新观测
+name, sim = gallery.match(query_emb, threshold=0.6)  # nearest neighbor
+gallery.add_anonymous(query_emb)                     # auto-name "Bear A/B/C/..."
+gallery.reinforce(name, query_emb)                   # add another exemplar to a known bear
 gallery.save()
 ```
 
-**结构：**
+**Schema:**
 
 ```jsonc
 {
@@ -146,7 +146,7 @@ gallery.save()
   "entries": [
     {
       "name": "Plunger",
-      "embeddings": [[0.123, -0.045, ...]],  // (512,) 已 L2-normalized
+      "embeddings": [[0.123, -0.045, ...]],  // (512,) L2-normalized
       "n_observations": 15
     },
     ...
@@ -154,79 +154,81 @@ gallery.save()
 }
 ```
 
-**多 shot 平均**：每只已知熊存最多 5 张 head crop 的 embedding，匹配时用平均向量（再次归一化）。新观测通过 `reinforce()` 滚动加入，旧的被踢掉，自适应熊的外观变化（季节、毛色、年龄）。
+**Multi-shot averaging**: each known bear stores up to 5 head-crop embeddings; matching uses the mean vector (re-normalized). New observations are added through `reinforce()` in a rolling buffer; old ones get evicted, letting the gallery adapt to seasonal/age-related appearance shifts.
 
-### 2.4 `head_crop_from_face_detector` —— 智能 crop 选择
+### 2.4 `head_crop_from_face_detector` — smart crop selection
 
-**文件：** [`src/identity/identify_bears.py`](../src/identity/identify_bears.py) 内的辅助函数
+**File:** the helper inside [`src/identity/identify_bears.py`](../src/identity/identify_bears.py)
 
-把 face detector 接入 identify pipeline 的关键胶水。逻辑：
+The glue that wires the face detector into the identity pipeline. Logic:
 
 ```python
 def head_crop_from_face_detector(frame, bear_bbox, face_detector):
     if face_detector is not None:
-        # 在全帧上跑 Faster-RCNN（不是在 YOLO crop 内跑 — 全帧分辨率高、检测更准）
+        # Run Faster-RCNN on the FULL frame (not on the YOLO crop —
+        # full-frame resolution is higher and detection is more accurate)
         face_dets = face_detector(frame)
-        # 留下中心位于熊 bbox 内的脸（IoU 至少 70%）
+        # Keep faces whose center sits inside the bear bbox (≥ 70% containment)
         candidates = [(box, score, frac) for box, score, frac in face_dets
                       if bbox_contains(bear_bbox, box) >= 0.7]
         if candidates:
             return crop, "face_detector", best_score
-    # Fallback：启发式裁剪 bbox 上 50% × 中央 60%
+    # Fallback: heuristic — top 50% × center 60% of the bbox
     return heuristic_crop(frame, bear_bbox), "heuristic", None
 ```
 
-**为什么在全帧而不是 YOLO crop 内检测？**
+**Why detect on the full frame instead of inside the YOLO crop?**
 
-实测：
-- 全帧（1426×794）：找到 2 个熊脸，score 0.99
-- YOLO bbox 内 crop（433×557）：找到 1 个假脸，score 0.54
+Measured:
+- Full frame (1426×794): 2 bear faces detected, scores 0.99
+- YOLO bbox crop (433×557): 1 false face detected, score 0.54
 
-原因：Faster-RCNN 训练分辨率约 1000-2000 px，YOLO crop 之后分辨率太低、目标太大、上下文丢失。
+Reason: Faster-RCNN was trained at ~1000–2000 px resolution. After YOLO cropping, resolution is too low, the target is too large, and surrounding context is lost.
 
 ---
 
-## 3. 数据流：一次完整运行
+## 3. Data flow: one full run
 
-### 3.1 输入
+### 3.1 Inputs
 
-- 视频文件（MP4/MOV，任意分辨率）
-- 已经跑过 `analyze_feeding.py` 的 `analysis.json`（含每帧每只熊的 bbox）
+- A video file (MP4/MOV, any resolution)
+- An `analysis.json` previously produced by `analyze_feeding.py` (with bbox per bear per frame)
 
-### 3.2 处理步骤
+### 3.2 Processing steps
 
 ```
                     [1] best_frames_per_bear()
-analysis.json  ───►  对每个 ByteTrack ID, 取置信度最高的前 K=10 帧
+analysis.json  ───►  for each ByteTrack ID, take the top-K=10 highest-conf frames
                     │
                     ▼
-                    [2] 对这 K 帧:
-                        - 在全帧跑 face detector
-                        - 找位于 bear bbox 内的脸
-                        - 找到 → 用 face crop
-                        - 找不到 → 用启发式 crop
+                    [2] for those K frames:
+                        - run face detector on the full frame
+                        - find the face inside the bear bbox
+                        - found → use the face crop
+                        - not found → fall back to the heuristic crop
                     │
                     ▼
                     [3] PoseSwinIdentifier.embed_batch()
-                        K 张 head crop → K × 512 维 embedding
+                        K head crops → K × 512-dim embeddings
                     │
                     ▼
-                    [4] 平均 + L2 归一化 → 1 个代表性 embedding
+                    [4] mean + L2 normalize → 1 representative embedding
                     │
                     ▼
                     [5] Gallery.match()
-                        在 98 只命名熊 + 之前积累的匿名熊里找最近邻
-                        cos sim ≥ 0.45 → 沿用名字
-                        否则           → gallery.add_anonymous()
+                        nearest neighbor over 98 named bears + previously
+                        accumulated anonymous bears
+                        cos sim ≥ 0.45 → reuse existing name
+                        else            → gallery.add_anonymous()
                     │
                     ▼
-                    [6] 写出 id_mapping.json
-                        + 更新 gallery.json (持久化)
+                    [6] write id_mapping.json
+                        + persist gallery.json
 ```
 
-### 3.3 输出
+### 3.3 Output
 
-`predictions/<video>/id_mapping.json`：
+`predictions/<video>/id_mapping.json`:
 
 ```json
 {
@@ -247,140 +249,140 @@ analysis.json  ───►  对每个 ByteTrack ID, 取置信度最高的前 K=
 }
 ```
 
-`feeding_viewer.py` 用 `--id-mapping` 参数读这个文件，把右栏 "Bear 1" 替换成 "Plunger"。
+`feeding_viewer.py` reads this through its `--id-mapping` flag and replaces "Bear 1" in the right-hand panel with "Plunger".
 
 ---
 
-## 4. 命名 Gallery 的构建
+## 4. Building the named gallery
 
-**文件：** [`src/identity/build_named_gallery.py`](../src/identity/build_named_gallery.py)
+**File:** [`src/identity/build_named_gallery.py`](../src/identity/build_named_gallery.py)
 
-一次性脚本，从 PoseSwin 训练数据建立"已知名字"的 gallery。
+A one-shot script that builds a "named bears" gallery from PoseSwin's training set.
 
-### 4.1 数据来源
+### 4.1 Data source
 
-- **来源**：`Public_release.zip` 中的 `data/reid_annotations/test_on_2022/train_iid.csv`（35,986 行 × 98 只熊）
-- **图片**：`Public_release/images/{2017-2021}_heads/images/*.JPG`（已经过 face detector 裁剪好的 head crop）
-- **熊名编码**：CSV 的 `id` 列直接是名字（"Plunger"、"Bony_Butt"、"Simba" ...）
-- **采样策略**：每只熊抽 15 张图（跨年份分散），共 1468 张
-- **总 GPU 时间**：~7 分钟（98 只 × 15 张 / batch_size=8）
+- **Source**: `data/reid_annotations/test_on_2022/train_iid.csv` from `Public_release.zip` (35,986 rows × 98 unique bears)
+- **Images**: `Public_release/images/{2017-2021}_heads/images/*.JPG` (already cropped head images by their face detector)
+- **Bear-name encoding**: the CSV's `id` column is literally the name ("Plunger", "Bony_Butt", "Simba", ...)
+- **Sampling strategy**: 15 images per bear, spread across years; 1468 in total
+- **Total GPU time**: ~7 minutes (98 bears × 15 images / batch_size=8)
 
-### 4.2 重要 caveat
+### 4.2 Important caveat
 
-**这 98 只命名熊主要来自 McNeil River 熊保护区**，不是 Brooks Falls / Brooks River。
+**The 98 named bears are mostly from the McNeil River Bear Sanctuary, NOT Brooks Falls / Brooks River.**
 
-- McNeil River 的研究者用形容词命名（Plunger、Hotlips、Aardvark...）
-- Brooks Falls 的熊用 NPS 编号 + 昵称命名（480 Otis、128 Grazer、747、856...）
-- 这两个种群虽然可能有少量个体重叠（熊会跨流域），**但绝大多数是不同个体**
+- McNeil researchers use descriptive names (Plunger, Hotlips, Aardvark, ...)
+- Brooks Falls bears get NPS numeric IDs + nicknames (480 Otis, 128 Grazer, 747, 856, ...)
+- The two populations may share a few individuals (bears do roam between drainages), but **most are different**
 
-实际意义：当我们在 Brooks Falls 的视频上跑 identifier 时，**模型给出的"Plunger" 这个名字应理解为"PoseSwin 训练库中长得最像本视频里熊的那只"，不是真名**。要识别真正的 Brooks Falls 个体，需要单独建一个 Brooks Falls 专属 gallery（用 NPS 出版的 *Bears of Brooks River eBook* 作 ground truth）。
+Practical implication: when we run the identifier on a Brooks Falls video, **the name "Plunger" the model returns means "the bear in the PoseSwin training set whose face most resembles the bear in this video" — not the actual identity**. To recognize real Brooks Falls individuals, build a Brooks-Falls-specific gallery using the NPS *Bears of Brooks River* eBook as ground truth.
 
 ---
 
-## 5. 实证结果
+## 5. Empirical results
 
-### 5.1 启发式 vs Face Detector 对比
+### 5.1 Heuristic vs face-detector crop
 
-在 3 只测试熊上（2 段视频）的余弦相似度（数值越高越自信）：
+Cosine similarity for 3 test bears (across 2 videos), higher = more confident match:
 
-| 熊 ID | 启发式 crop | Face detector + fallback | 提升 |
+| Bear ID | Heuristic crop | Face detector + fallback | Improvement |
 |---|---|---|---|
 | Gully clip → Plunger | 0.677 | **0.851** | **+0.174** |
 | salmon_jump_2 #1 → Bony_Butt | 0.745 | **0.850** | **+0.105** |
 | salmon_jump_2 #2 → Simba | 0.792 | 0.760 | -0.032 |
 
-3 只熊的最终匹配名都没变，但 2 只的置信度大幅提升、1 只略微下降。Gully 的 0.677 → 0.851 让它从"刚好过 0.6 边界"变成"高置信"。
+The 3 final matched names didn't change, but 2 out of 3 confidences improved substantially while 1 dropped slightly. Gully going from 0.677 → 0.851 lifted it from "barely above 0.6 threshold" to "high confidence".
 
-### 5.2 Face detector 覆盖率
+### 5.2 Face-detector coverage
 
-在 Gully clip 的 48 个采样帧上：
+On 48 sampled frames of the Gully clip:
 
-- 19% 的帧能检测到熊脸（score > 0.3）
+- 19% of frames have a detectable bear face (score > 0.3)
 - Top score 0.89
-- 不能检测到的帧主要是：熊低头扑水、熊背对镜头、熊在水花/逆光中
+- Frames where detection fails are mostly: bear with head down chasing fish, bear with back to camera, bear in spray / backlight
 
-策略：top-K=10 框架抽样保证每只熊有 ≥ 1 张 face detector crop，剩下用启发式补齐。
+Strategy: top-K=10 frame sampling guarantees each bear gets ≥ 1 face-detector crop, with the rest filled by the heuristic.
 
-### 5.3 性能开销
+### 5.3 Performance overhead
 
-| 阶段 | GPU 时间（单卡 RTX 2080 Ti） | 备注 |
+| Stage | GPU time (single RTX 2080 Ti) | Note |
 |---|---|---|
-| 加载 PoseSwin 模型 | ~7 秒 | 一次性 |
-| 加载 Face detector | ~2 秒 | 一次性 |
-| Face detection（全帧 794×1426） | ~0.15 秒/帧 | 每只熊跑 K=10 帧 = 1.5 秒 |
-| PoseSwin embedding（batch 10） | ~0.4 秒 | 1 次/熊 |
-| Gallery 匹配 | ~1 ms | NumPy 矩阵乘 |
-| **总计**：12 秒 / 1 只熊视频 | ~10-15 秒 | |
+| Load PoseSwin model | ~7 s | one-time |
+| Load face detector | ~2 s | one-time |
+| Face detection (full frame 794×1426) | ~0.15 s/frame | K=10 frames per bear = 1.5 s |
+| PoseSwin embedding (batch 10) | ~0.4 s | once per bear |
+| Gallery match | ~1 ms | NumPy matmul |
+| **Total**: ~12 s per bear, per video | ~10–15 s | |
 
-`identify_bears.py` 用 GPU，但**只跑一次**就把 mapping 缓存到 JSON 里。`feeding_viewer.py` 后续渲染只读 JSON、不用 GPU。
+`identify_bears.py` uses GPU but **runs only once** per video, caching the mapping to JSON. Subsequent `feeding_viewer.py` rendering only reads the JSON — no GPU needed.
 
 ---
 
-## 6. 局限性
+## 6. Limitations
 
-| 局限 | 说明 | 缓解方案 |
+| Limitation | Detail | Mitigation |
 |---|---|---|
-| **训练数据集合不匹配** | PoseSwin 训练集主要是 McNeil River 熊；Brooks Falls 的真名熊（Otis、Grazer 等）不在 gallery 里 | 用 NPS *Bears of Brooks River* eBook 单独建 Brooks Falls gallery |
-| **CC BY-NC 4.0 许可证** | 模型权重和训练数据都是非商用许可 | 等 Alex 答复商用范围；或者只用方法（Swin + metric learning）在自有数据上重训 |
-| **极端姿态召回率低** | 熊低头吃鱼、背对镜头时 face detector 失败 | 启发式 fallback 兜底；或者用 `top-k` 抽更多帧 |
-| **单视频内不分辨同框熊** | 如果 ByteTrack 把两只熊错合并成一个 track，identifier 会给一个名字 | 上游问题，需要 ByteTrack 调参或用更强的 tracker |
-| **CC BY-NC 4.0 许可证** | 不能用于商业产品 | 同上 |
-| **匹配阈值需手工调** | 0.45 是基于 3 只熊的小样本，统计不充分 | 在 100+ 帧人工标注 ground truth 上做 ROC 分析 |
+| **Training-set mismatch** | PoseSwin training set is mostly McNeil River bears; Brooks Falls bears (Otis, Grazer, etc.) are not in the gallery | Build a Brooks Falls gallery using the NPS *Bears of Brooks River* eBook |
+| **CC BY-NC 4.0 license** | Both model weights and training data are non-commercial | Wait for Alex's commercial-scope answer, or use only the method (Swin + metric learning) and re-train on permissive data |
+| **Low recall in extreme poses** | Face detector fails when the bear has its head down eating fish or its back to the camera | Heuristic fallback covers it; or sample more frames via top-k |
+| **Doesn't separate co-located bears within a single video** | If ByteTrack accidentally merges two bears into one track, the identifier will hand them one name | Upstream issue — needs ByteTrack tuning or a stronger tracker |
+| **Match threshold is hand-tuned** | 0.45 was set based on a 3-bear sample — not statistically validated | ROC analysis on a 100+ frame human-labeled ground-truth set |
 
 ---
 
-## 7. 使用示例
+## 7. Usage examples
 
-### 7.1 完整 3 步流水线
+### 7.1 Full 3-step pipeline
 
 ```bash
 cd /home/katmai/katmai-cv-pipeline
 
-# Step 1 — 行为分析（每帧每只熊的 bbox + 5 阶段标签）
+# Step 1 — behavior analysis (per-bear bbox + 5-stage labels per frame)
 WANDB_MODE=disabled venv/bin/python3 -m src.behavior.analyze_feeding \
     --video feed/data_video/<clip>.mp4 \
     --interval 0.25
 
-# Step 2 — 身份识别（Faster-RCNN 头检测 + PoseSwin 匹配）
+# Step 2 — identity assignment (Faster-RCNN head detection + PoseSwin matching)
 WANDB_MODE=disabled venv/bin/python3 -m src.identity.identify_bears \
     --video feed/data_video/<clip>.mp4 \
     --analysis predictions/<clip>_feeding_analysis/analysis.json \
     --gallery data/identity/named_bear_gallery.json \
     --threshold 0.45
 
-# Step 3 — 渲染带身份的 demo 视频
+# Step 3 — render the identity-aware demo video
 WANDB_MODE=disabled venv/bin/python3 -m src.behavior.feeding_viewer \
     --video feed/data_video/<clip>.mp4 \
     --analysis predictions/<clip>_feeding_analysis/analysis.json \
     --id-mapping predictions/<clip>_feeding_analysis/id_mapping.json
 ```
 
-### 7.2 常用 CLI 选项
+### 7.2 Common CLI options
 
 ```bash
-# 只用启发式 crop（快速，不依赖 face detector）
+# Heuristic crop only — fast, no face detector
 ... identify_bears --no-face-detector ...
 
-# 调高 face detection 阈值（更严格，少假阳性）
+# Stricter face detection threshold (fewer false positives)
 ... identify_bears --face-score-threshold 0.5 ...
 
-# Dry run（不更新 gallery）
+# Dry run — don't update the gallery
 ... identify_bears --dry-run ...
 
-# 用匿名 gallery 而不是命名 gallery（适合纯跨视频持久化、不需要真名）
+# Use the anonymous gallery instead of the named one
+# (suitable when you only want cross-video persistence, not real names)
 ... identify_bears --gallery data/identity/bear_gallery.json ...
 
-# 改身份匹配阈值
+# Change the matching threshold
 ... identify_bears --threshold 0.55 ...
 ```
 
-### 7.3 重建命名 gallery
+### 7.3 Rebuilding the named gallery
 
-如果训练数据更新或换数据源：
+If the training data is updated or you switch source data:
 
 ```bash
-# 1. 把每只熊的 head crop 放到 data/identity/gallery_images/<bear_name>/*.JPG
-# 2. 重新计算 embedding
+# 1. Drop your per-bear head crops in data/identity/gallery_images/<bear_name>/*.JPG
+# 2. Recompute embeddings
 WANDB_MODE=disabled venv/bin/python3 -m src.identity.build_named_gallery \
     --image-root data/identity/gallery_images \
     --output     data/identity/named_bear_gallery.json \
@@ -389,34 +391,34 @@ WANDB_MODE=disabled venv/bin/python3 -m src.identity.build_named_gallery \
 
 ---
 
-## 8. 文件清单
+## 8. File listing
 
-| 文件 | 作用 | 行数 |
+| File | Purpose | LOC |
 |---|---|---|
-| [`src/identity/__init__.py`](../src/identity/__init__.py) | Package marker | 0 |
-| [`src/identity/poseswin_identifier.py`](../src/identity/poseswin_identifier.py) | PoseSwin 模型封装 + Gallery 类 + 启发式 head crop | ~210 |
-| [`src/identity/face_detector.py`](../src/identity/face_detector.py) | Faster-RCNN 头检测 + mmdet→torchvision 权重转换 | ~160 |
-| [`src/identity/identify_bears.py`](../src/identity/identify_bears.py) | CLI 入口：analysis.json + 视频 → id_mapping.json | ~210 |
-| [`src/identity/build_named_gallery.py`](../src/identity/build_named_gallery.py) | 一次性脚本，从训练 head crop 建 named gallery | ~80 |
-| [`src/behavior/feeding_viewer.py`](../src/behavior/feeding_viewer.py) | 已修改：加 `--id-mapping` 参数渲染真名 | ~400 |
-| [`data/identity/named_bear_gallery.json`](../data/identity/named_bear_gallery.json) | 98 只命名熊的 embedding 库（约 200 KB） | — |
-| [`data/identity/gallery_images/`](../data/identity/gallery_images/) | 1468 张训练 head crop，按熊名分文件夹 | — |
-| [`external/BrownBear_ReID/`](../external/BrownBear_ReID/) | 上游仓库 + 4.2 GB checkpoints（已 .gitignore） | — |
+| [`src/identity/__init__.py`](../src/identity/__init__.py) | package marker | 0 |
+| [`src/identity/poseswin_identifier.py`](../src/identity/poseswin_identifier.py) | PoseSwin model wrapper + Gallery class + heuristic head crop | ~210 |
+| [`src/identity/face_detector.py`](../src/identity/face_detector.py) | Faster-RCNN head detector + mmdet→torchvision weight conversion | ~160 |
+| [`src/identity/identify_bears.py`](../src/identity/identify_bears.py) | CLI entry point: analysis.json + video → id_mapping.json | ~210 |
+| [`src/identity/build_named_gallery.py`](../src/identity/build_named_gallery.py) | one-shot: build named gallery from training head crops | ~80 |
+| [`src/behavior/feeding_viewer.py`](../src/behavior/feeding_viewer.py) | modified: added `--id-mapping` flag for rendering real names | ~400 |
+| [`data/identity/named_bear_gallery.json`](../data/identity/named_bear_gallery.json) | embedding library for 98 named bears (~200 KB) | — |
+| [`data/identity/gallery_images/`](../data/identity/gallery_images/) | 1468 training head crops, organized by bear name | — |
+| [`external/BrownBear_ReID/`](../external/BrownBear_ReID/) | upstream repo + 4.2 GB checkpoints (gitignored) | — |
 
 ---
 
-## 9. 后续工作（按优先级）
+## 9. Future work (in priority order)
 
-1. **Brooks Falls 专属 gallery** —— 用 NPS *Bears of Brooks River eBook* 给 Otis、Grazer 等著名熊建库，让模型给出真名而不是"长得像 Plunger"
-2. **阈值校准** —— 在 100-200 帧人工标注 ground truth 上做 ROC 分析，确定每只熊的最优 threshold
-3. **License 问题** —— 等 Alex 答复 CC BY-NC 4.0 是否对项目交付有影响；如有需要，准备 method-only re-training 方案
-4. **检测精度提升** —— 探索接入 DeepLabCut 或 MMPose AP10K 做更精确的关键点定位（替代启发式 fallback）
-5. **跨视频 demo** —— 跑一组 5-10 段同一只熊的视频，验证 gallery 持久化下身份保持一致
-6. **集成测试** —— 写一个端到端的 pytest，确保未来 PoseSwin / face detector 重构不破坏匹配结果
+1. **Brooks Falls dedicated gallery** — use the NPS *Bears of Brooks River eBook* to build a gallery for Otis, Grazer, and other famous bears so the model can output real names instead of "looks like Plunger"
+2. **Threshold calibration** — ROC analysis on 100–200 human-labeled ground-truth frames to find the optimal threshold per bear
+3. **License question** — pending Alex's response on whether CC BY-NC 4.0 affects the project deliverable; if it does, prepare a method-only re-training plan
+4. **Better detection accuracy** — explore DeepLabCut or MMPose AP10K for more accurate keypoint localization (replacing the heuristic fallback)
+5. **Cross-video demo** — run the full pipeline on a 5–10 clip set of the same bear and verify the gallery keeps the identity stable across all of them
+6. **Integration test** — add a pytest harness so future PoseSwin / face-detector refactors don't silently break the matching results
 
 ---
 
-## 10. 参考文献与资源
+## 10. References and resources
 
 1. **Rosenberg, B., Zhou, M., Wolf, N., Mathis, M.W., Harris, B.P., Mathis, A.** (2026). *Individual identification of brown bears using pose-aware metric learning.* Current Biology.
 2. **Liu, Z., Lin, Y., Cao, Y., et al.** (2021). *Swin Transformer: Hierarchical Vision Transformer using Shifted Windows.* ICCV.
