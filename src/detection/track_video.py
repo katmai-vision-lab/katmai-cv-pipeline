@@ -47,6 +47,9 @@ def main():
                         help="Filter: drop groups shorter than N frames (default 30)")
     parser.add_argument("--min-mean-conf", type=float, default=0.80,
                         help="Filter: drop groups with mean conf < this (default 0.80)")
+    parser.add_argument("--imgsz", type=int, default=640,
+                        help="YOLO inference image size (default 640). Try 1280 for "
+                             "better recall on light-colored or close-up bears (~2-3x slower).")
     parser.add_argument("--no-trails", action="store_true",
                         help="Skip the trajectory-overlay video (default: also produce one)")
     parser.add_argument("--trail-frames", type=int, default=0,
@@ -89,6 +92,7 @@ def main():
         max_dist_px=args.max_dist_px,
         min_duration=args.min_duration,
         min_mean_conf=args.min_mean_conf,
+        imgsz=args.imgsz,
     )
 
     video_files = list(output_dir.glob("*.mp4")) + list(output_dir.glob("*.avi"))
