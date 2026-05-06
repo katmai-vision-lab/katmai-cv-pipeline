@@ -30,6 +30,20 @@ predictions
 # ignore model files
 models/
 
+# ignore third-party model checkpoints + their downloads
+external/
+*.zip
+
+# ignore work videos and raw footage
+feed/
+
+# ignore large gallery image sets (re-downloadable from public dataset)
+data/identity/gallery_images/
+
+# ignore misc output dumps
+outputs/
+ppt_preview/
+
 # ignore test/log files
 test_*.log
 test_*.txt
