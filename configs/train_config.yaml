@@ -25,7 +25,7 @@ perspective: 0.0
 flipud: 0.0            
 fliplr: 0.5           
 
-# Mosaic/MixUp增强
+# Mosaic / MixUp augmentation
 mosaic: 1.0             
 mixup: 0.0              
 copy_paste: 0.0        

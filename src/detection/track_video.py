@@ -43,8 +43,18 @@ def main():
                         help="Merge: max frame gap to still connect same bear (default 3600 = 2min @ 30fps)")
     parser.add_argument("--max-dist-px", type=int, default=150,
                         help="Merge: max pixel distance at transition (default 150)")
-    parser.add_argument("--min-duration", type=int, default=30,
-                        help="Filter: drop groups shorter than N frames (default 30)")
+    parser.add_argument("--cooccur-tol-frames", type=int, default=60,
+                        help="Merge: tolerate up to N co-occurrence frames as detection "
+                             "artifact if mean dist < max_dist_px (default 60)")
+    parser.add_argument("--cooccur-artifact-iou", type=float, default=0.3,
+                        help="Merge: if two co-occurring bboxes overlap with mean IoU >= "
+                             "this, treat as same animal regardless of duration (default 0.3)")
+    parser.add_argument("--min-duration", type=int, default=150,
+                        help="Post-merge filter: drop groups shorter than N frames (default 150 = 5s @ 30fps)")
+    parser.add_argument("--min-raw-duration", type=int, default=None,
+                        help="Pre-merge filter: drop raw tracks shorter than N frames "
+                             "BEFORE merge step. Prevents brief detections from being used "
+                             "as merge bridges. Default: same as --min-duration")
     parser.add_argument("--min-mean-conf", type=float, default=0.80,
                         help="Filter: drop groups with mean conf < this (default 0.80)")
     parser.add_argument("--imgsz", type=int, default=640,
@@ -90,7 +100,10 @@ def main():
         tracker=args.tracker,
         max_gap_frames=args.max_gap_frames,
         max_dist_px=args.max_dist_px,
+        cooccurrence_tolerance_frames=args.cooccur_tol_frames,
+        cooccurrence_artifact_iou=args.cooccur_artifact_iou,
         min_duration=args.min_duration,
+        min_raw_duration=args.min_raw_duration,
         min_mean_conf=args.min_mean_conf,
         imgsz=args.imgsz,
     )
