@@ -1304,7 +1304,7 @@ class BearDetector:
 
     def _save_prediction_metadata(self, video_path, output_dir, conf, results):
         """Save prediction metadata"""
-        # 只遍历一次流式生成器，同时收集帧数和检测数
+        # Iterate the streaming generator once, accumulating frame and detection counts
         total_frames = 0
         total_detections = 0
         
