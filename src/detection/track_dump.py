@@ -43,16 +43,13 @@ def main():
                         help="Merge: max frame gap (default 3600 = 2min @ 30fps)")
     parser.add_argument("--max-dist-px", type=int, default=150,
                         help="Merge: max pixel distance at transition (default 150)")
-    parser.add_argument("--cooccur-tol-frames", type=int, default=60,
-                        help="Merge: tolerate up to N co-occurrence frames as detection "
-                             "artifact if mean dist < max_dist_px (default 60)")
-    parser.add_argument("--cooccur-artifact-iou", type=float, default=0.3,
-                        help="Merge: if two co-occurring bboxes overlap with mean IoU >= "
-                             "this, treat as same animal regardless of duration (default 0.3)")
-    parser.add_argument("--min-duration", type=int, default=150,
-                        help="Filter: drop groups shorter than this many frames (default 150 = 5s @ 30fps)")
+    parser.add_argument("--min-duration", type=int, default=30,
+                        help="Filter: drop groups shorter than this many frames (default 30)")
     parser.add_argument("--min-mean-conf", type=float, default=0.80,
                         help="Filter: drop groups whose mean conf < this (default 0.80)")
+    parser.add_argument("--imgsz", type=int, default=640,
+                        help="YOLO inference image size (default 640). Try 1280 for "
+                             "better recall on light-colored or close-up bears.")
 
     args = parser.parse_args()
 
@@ -85,6 +82,7 @@ def main():
         verbose=False,
         vid_stride=args.frame_skip,
         persist=True,
+        imgsz=args.imgsz,
     )
 
     frame_data = []
@@ -94,20 +92,14 @@ def main():
         boxes = result.boxes
         track_ids = []
         positions = {}
-        track_boxes = {}
         confs = {}
         if boxes.id is not None:
             ids_arr = boxes.id.cpu().numpy().astype(int).tolist()
             xywh = boxes.xywh.cpu().numpy()
-            xyxy = boxes.xyxy.cpu().numpy()
             conf_arr = boxes.conf.cpu().numpy()
             for i, tid in enumerate(ids_arr):
                 track_ids.append(tid)
                 positions[tid] = (round(float(xywh[i][0]), 1), round(float(xywh[i][1]), 1))
-                track_boxes[tid] = (
-                    float(xyxy[i][0]), float(xyxy[i][1]),
-                    float(xyxy[i][2]), float(xyxy[i][3]),
-                )
                 confs[tid] = round(float(conf_arr[i]), 3)
 
         frame_idx = len(frame_data)
@@ -115,7 +107,6 @@ def main():
             'frame': frame_idx,
             'track_ids': track_ids,
             'track_positions': positions,
-            'track_boxes': track_boxes,
             'track_confs': confs,
         })
         per_frame_dump.append({
@@ -161,8 +152,6 @@ def main():
         frame_data,
         max_gap_frames=args.max_gap_frames,
         max_dist_px=args.max_dist_px,
-        cooccurrence_tolerance_frames=args.cooccur_tol_frames,
-        cooccurrence_artifact_iou=args.cooccur_artifact_iou,
     )
 
     # ---- Filter spurious groups ----

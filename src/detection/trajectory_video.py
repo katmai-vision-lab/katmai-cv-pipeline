@@ -126,7 +126,7 @@ def draw_legend(frame, bear_ids, font_scale=0.6):
 
 
 def render(traj_path, video_path, output_path, trail_frames, thickness,
-           draw_box, draw_id):
+           draw_box, draw_id, reset_gap_frames=30):
     with open(traj_path) as f:
         traj = json.load(f)
 
@@ -149,6 +149,7 @@ def render(traj_path, video_path, output_path, trail_frames, thickness,
 
     # One bounded deque of past centroids per bear, capped at trail_frames.
     trails = {bid: deque(maxlen=trail_frames) for bid in bear_ids}
+    last_seen = {bid: -10**9 for bid in bear_ids}
 
     for f_idx in tqdm(range(total), desc="Rendering trails"):
         ret, frame = cap.read()
@@ -156,15 +157,21 @@ def render(traj_path, video_path, output_path, trail_frames, thickness,
             break
 
         # Push current-frame positions into each bear's trail deque.
+        # If this bear has been gone for > reset_gap_frames (camera zoom / cut),
+        # clear its old trail — old pixel coords won't match the new view.
         seen_this_frame = set()
         for det in per_frame.get(f_idx, []):
             bid = det["bid"]
+            if f_idx - last_seen[bid] > reset_gap_frames:
+                trails[bid].clear()
             trails[bid].append((int(round(det["cx"])), int(round(det["cy"]))))
+            last_seen[bid] = f_idx
             seen_this_frame.add(bid)
 
-        # Draw all trails (even bears not visible in this frame keep their fading history).
+        # Only draw trails for bears visible in the current frame.
         for bid in bear_ids:
-            draw_trail(frame, list(trails[bid]), bear_color(bid), thickness)
+            if bid in seen_this_frame:
+                draw_trail(frame, list(trails[bid]), bear_color(bid), thickness)
 
         # Draw current detection markers (dot, optional bbox + ID).
         for det in per_frame.get(f_idx, []):
@@ -236,6 +243,10 @@ def main():
                         help="Do not draw current-frame bounding boxes")
     parser.add_argument("--no-id", action="store_true",
                         help="Do not draw 'Bear N' labels next to each bear")
+    parser.add_argument("--reset-gap-frames", type=int, default=30,
+                        help="Clear a bear's trail when it has been absent for >N frames "
+                             "(handles camera zoom/cut where old pixel coords no longer "
+                             "match the current view). Default 30.")
     args = parser.parse_args()
 
     traj_path = Path(args.trajectories)
@@ -271,6 +282,7 @@ def main():
         thickness=args.thickness,
         draw_box=not args.no_box,
         draw_id=not args.no_id,
+        reset_gap_frames=args.reset_gap_frames,
     )
 
 

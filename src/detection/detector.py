@@ -352,8 +352,6 @@ class BearDetector:
 
     @staticmethod
     def _merge_fragmented_tracks(frame_data, max_gap_frames=3600, max_dist_px=150,
-                                  cooccurrence_tolerance_frames=60,
-                                  cooccurrence_artifact_iou=0.3,
                                   decisions=None):
         """
         Post-process track IDs to merge fragments from the same bear.
@@ -495,16 +493,12 @@ class BearDetector:
         candidates = []
         for i, a in enumerate(track_ids):
             for b in track_ids[i + 1:]:
-                if is_real_cooccurrence(a, b):
+                pair = (min(a, b), max(a, b))
+                if pair in co_occurring:
                     if decisions is not None:
-                        n, mean_dist, mean_iou = cooccur_info(a, b)
-                        md = f', mean dist {mean_dist:.1f}px' if mean_dist is not None else ''
-                        mi = f', mean IoU {mean_iou:.2f}' if mean_iou is not None else ''
                         decisions.append({
                             'a': a, 'b': b, 'result': 'rejected',
-                            'cooccur_frames': n,
-                            'mean_iou': round(mean_iou, 3) if mean_iou is not None else None,
-                            'reason': f'co-occurred for {n} frames{md}{mi} (different bears)',
+                            'reason': 'co-occurred in at least one frame (different bears)',
                         })
                     continue
 
@@ -518,7 +512,12 @@ class BearDetector:
                 elif track_first_frame[a] <= track_first_frame[b]:
                     early, late = a, b
                 else:
-                    early, late = b, a
+                    if decisions is not None:
+                        decisions.append({
+                            'a': a, 'b': b, 'result': 'rejected',
+                            'reason': 'time ranges overlap but never co-occurred (ambiguous)',
+                        })
+                    continue
 
                 gap = max(track_first_frame[late] - track_last_frame[early], 0)
                 if gap > max_gap_frames:
@@ -575,19 +574,10 @@ class BearDetector:
                     })
                 continue
             if decisions is not None:
-                n_overlap, _, mean_iou = cooccur_info(a, b)
-                tol_parts = []
-                if n_overlap > 0:
-                    tol_parts.append(f'tolerated {n_overlap}f overlap')
-                if mean_iou is not None and mean_iou > 0:
-                    tol_parts.append(f'mean IoU {mean_iou:.2f}')
-                tol_note = f' ({", ".join(tol_parts)})' if tol_parts else ''
                 decisions.append({
                     'a': a, 'b': b, 'gap': _gap, 'dist_px': round(_dist, 1),
-                    'cooccur_frames': n_overlap,
-                    'mean_iou': round(mean_iou, 3) if mean_iou is not None else None,
                     'result': 'merged',
-                    'reason': f'gap={_gap}f, dist={_dist:.1f}px{tol_note}',
+                    'reason': f'gap={_gap}f, dist={_dist:.1f}px (both within thresholds)',
                 })
             union(a, b)
 
@@ -595,7 +585,7 @@ class BearDetector:
         return len(groups), {tid: find(tid) for tid in track_ids}
 
     @staticmethod
-    def _filter_spurious_groups(frame_data, id_map, min_duration=150, min_mean_conf=0.80,
+    def _filter_spurious_groups(frame_data, id_map, min_duration=30, min_mean_conf=0.80,
                                 long_duration=500, drop_log=None):
         """
         Drop groups that look like noise. Compound rule:
@@ -784,8 +774,6 @@ class BearDetector:
         merge_decisions = []
         _, id_map_pre_filter = self._merge_fragmented_tracks(
             frame_data, max_gap_frames=max_gap_frames, max_dist_px=max_dist_px,
-            cooccurrence_tolerance_frames=cooccurrence_tolerance_frames,
-            cooccurrence_artifact_iou=cooccurrence_artifact_iou,
             decisions=merge_decisions,
         )
         # --- Filter spurious (short or low-confidence) groups ---
@@ -967,9 +955,6 @@ class BearDetector:
             'params': {
                 'max_gap_frames': max_gap_frames,
                 'max_dist_px': max_dist_px,
-                'cooccurrence_tolerance_frames': cooccurrence_tolerance_frames,
-                'cooccurrence_artifact_iou': cooccurrence_artifact_iou,
-                'min_raw_duration': min_raw_duration,
                 'min_duration': min_duration,
                 'min_mean_conf': min_mean_conf,
             },
@@ -982,7 +967,6 @@ class BearDetector:
             },
             'raw_tracks': raw_tracks_report,
             'final_bears': bear_merge_chain,
-            'pre_merge_dropped_raws': {str(k): v for k, v in pre_merge_dropped.items()},
             'filtered_groups': filtered_groups_report,
             'decisions': merge_decisions,
         }
