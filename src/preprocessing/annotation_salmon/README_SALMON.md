@@ -1,58 +1,58 @@
 # Salmon Auto-Annotation System
 
-这是专为**跃出水面的三文鱼检测**优化的系统。
+This system is tuned specifically for **detecting salmon as they jump out of the water**.
 
-## 系统架构
+## System architecture
 
-### 3模型配置（最优推荐）
+### Three-model configuration (recommended optimum)
 
-| 模型 | 版本 | 权重 | 专长 |
-|------|------|------|------|
-| **Grounding DINO** | base | 0.40 | 文本理解，通用目标检测 |
-| **OWL-ViT v2** | base-ensemble | 0.35 | 动作理解（"跳跃"、"跃出"） |
-| **Florence-2** | base | 0.25 | 复杂场景（水花、反光） |
+| Model | Variant | Weight | Specialty |
+|-------|---------|--------|-----------|
+| **Grounding DINO** | base | 0.40 | Text understanding, general-purpose detection |
+| **OWL-ViT v2** | base-ensemble | 0.35 | Action understanding ("jumping", "leaping") |
+| **Florence-2** | base | 0.25 | Robust on complex scenes (splash, reflections) |
 
-**min_agreement**: 2 (3个模型中至少2个同意)
+**min_agreement**: 2 (at least 2 of the 3 models must agree)
 
-### vs. 熊系统 (annotation_bear)
+### vs. the bear system (annotation_bear)
 
-| 差异 | 熊系统 | 三文鱼系统 |
-|------|--------|------------|
-| 模型组合 | GDINO + DETR + MegaDetector | GDINO + OWL-ViT v2 + Florence-2 |
-| MegaDetector | ✅ 启用（陆地动物专用） | ❌ 禁用（不适合水生生物） |
-| DETR | ✅ 启用 | ❌ 禁用（精度低35.4%） |
-| 默认prompt | "bear" | "salmon" / "salmon jumping out of water" |
-| 模型权重 | 0.406/0.335/0.259 | 0.40/0.35/0.25 |
-| 场景优化 | 陆地森林环境 | 水面跳跃场景 |
+| Difference | Bear system | Salmon system |
+|------------|-------------|---------------|
+| Model combo | GDINO + DETR + MegaDetector | GDINO + OWL-ViT v2 + Florence-2 |
+| MegaDetector | ✅ enabled (land animals) | ❌ disabled (not suited to aquatic species) |
+| DETR | ✅ enabled | ❌ disabled (low precision, 35.4%) |
+| Default prompt | "bear" | "salmon" / "salmon jumping out of water" |
+| Model weights | 0.406 / 0.335 / 0.259 | 0.40 / 0.35 / 0.25 |
+| Scene specialization | Land / forest environment | Above-water jumping |
 
-### 模型选择理由
+### Why these models
 
-#### 🚀 OWL-ViT v2 的优势
-- **CLIP架构**：擅长理解动作概念（"jumping"、"leaping"）
-- **Zero-shot能力**：无需预训练即可理解"salmon jumping"
-- **场景适应**：对提示词 "salmon jumping out of water" 响应好
+#### 🚀 Strength of OWL-ViT v2
+- **CLIP architecture**: good at action concepts ("jumping", "leaping")
+- **Zero-shot**: understands "salmon jumping" without prior training
+- **Scene fit**: responds well to prompts like "salmon jumping out of water"
 
-#### 🧠 Florence-2 的优势
-- **最新VLM** (2024发布)：视觉-语言多模态模型
-- **鲁棒性强**：对水花飞溅、水面反光等复杂场景更稳定
-- **泛化能力**：在各种光照、角度下表现一致
+#### 🧠 Strength of Florence-2
+- **Latest VLM** (2024 release): vision-language multimodal model
+- **Robust**: stable on splashes and reflections
+- **Generalizes well**: consistent across lighting and angle
 
-#### ❌ 为什么禁用MegaDetector和DETR？
-- **MegaDetector v5**: 专门为**陆地野生动物**（熊、鹿、狼）训练，对鱼类形态识别能力差
-- **DETR**: 在熊系统评估中精度仅35.4%，假阳性率高
+#### ❌ Why MegaDetector and DETR are disabled
+- **MegaDetector v5**: trained for **land wildlife** (bears, deer, wolves); poor on fish morphology
+- **DETR**: only 35.4% precision in the bear-system arena, with too many false positives
 
-## 使用方法
+## Usage
 
-### 基础用法
+### Basic flow
 
 ```bash
-# 1. 提取视频帧
+# 1. Extract video frames
 python -m src.preprocessing.annotation_salmon.frame_extractor \
   --input salmon_jumping_video.mp4 \
   --output data/frames/salmon/ \
   --fps 0.5
 
-# 2. 自动标注（3模型ensemble）
+# 2. Auto-annotate (3-model ensemble)
 python -m src.preprocessing.annotation_salmon.multi_model_annotator \
   --input data/frames/salmon/ \
   --output data/auto_labels_salmon/ \
@@ -61,7 +61,7 @@ python -m src.preprocessing.annotation_salmon.multi_model_annotator \
   --min-agreement 2 \
   --auto-approve
 
-# 3. 可视化验证
+# 3. Visualize for sanity-check
 python -m src.preprocessing.annotation_salmon.visualize_labels \
   --images data/frames/salmon/subfolder/ \
   --labels data/auto_labels_salmon/ \
@@ -69,12 +69,12 @@ python -m src.preprocessing.annotation_salmon.visualize_labels \
   --limit 10
 ```
 
-### 高级：概率校准
+### Advanced: probability calibration
 
-如果你有标注好的三文鱼验证集：
+If you have a labeled salmon validation set:
 
 ```bash
-# 训练校准器（使用3个模型）
+# Train calibrators (using all 3 models)
 python -m src.preprocessing.annotation_salmon.train_calibration \
   --images data/annotation/salmon/images/train/ \
   --labels data/annotation/salmon/labels/train/ \
@@ -84,7 +84,7 @@ python -m src.preprocessing.annotation_salmon.train_calibration \
   --use-owlvit \
   --use-florence2
 
-# 使用校准器标注
+# Use the calibrators when annotating
 python -m src.preprocessing.annotation_salmon.multi_model_annotator \
   --input data/frames/salmon/ \
   --output data/auto_labels_salmon/ \
@@ -93,83 +93,83 @@ python -m src.preprocessing.annotation_salmon.multi_model_annotator \
   --calibrator models/calibrators_salmon.pkl
 ```
 
-## 提示词优化
+## Prompt tuning
 
-**推荐提示词（针对跳跃场景）**：
+**Recommended prompts (jumping scenes):**
 
 ```bash
-# 最优推荐（默认）
+# Best default
 --prompt "jumping salmon"
 
-# 备选动作词
+# Alternative action words
 --prompt "leaping salmon"
 --prompt "salmon in mid-air"
 
-# 种类特定
+# Species-specific
 --prompt "jumping chinook salmon"
 --prompt "leaping sockeye salmon"
 
-# 简洁通用
+# Concise generic
 --prompt "salmon"
 ```
 
-**不推荐**：
-- ❌ "salmon jumping out of water" (包含"water"会被Florence-2误检为大框)
-- ❌ "salmon swimming" (水下场景，模型优化不匹配)
-- ❌ "dead salmon" (非动态场景)
-- ❌ "salmon in bear mouth" (复合场景，用熊系统更好)
+**Not recommended**:
+- ❌ "salmon jumping out of water" (the word "water" causes Florence-2 to draw very large boxes)
+- ❌ "salmon swimming" (underwater scene, model isn't tuned for this)
+- ❌ "dead salmon" (no motion signal)
+- ❌ "salmon in bear mouth" (composite scene; the bear system is a better fit)
 
-## 性能预期
+## Performance expectations
 
-由于只有2个模型，预期性能：
-- **召回率**: 可能略低于熊系统（少一个模型）
-- **精度**: 取决于GDINO和DETR对"salmon"的泛化能力
-- **速度**: 更快（少加载一个模型）
+With only the 3 models active, expect:
+- **Recall**: possibly slightly lower than the bear system (one fewer model)
+- **Precision**: depends on how well GDINO and OWL-ViT generalize to "salmon"
+- **Speed**: faster (one fewer model loaded)
 
-**建议**：
-1. 先在小样本上测试效果
-2. 如果误报多，提高 `--min-agreement` 为 2
-3. 如果漏检多，降低置信度阈值或使用单模型
+**Suggestions**:
+1. First test on a small sample
+2. If you see many false positives, raise `--min-agreement` to 2
+3. If you miss many salmon, lower the confidence threshold or run a single model
 
-## 进一步优化方向
+## Future improvements
 
-1. **收集三文鱼验证集**（100-500张）
-   - 运行模型竞技场评估
-   - 计算针对三文鱼的最优权重
-   - 训练专用校准器
+1. **Collect a labeled salmon validation set** (100–500 images)
+   - Run the model arena
+   - Compute salmon-specific optimal weights
+   - Train a dedicated calibrator
 
-2. **尝试其他模型**
-   - OWL-ViT: 另一个强大的zero-shot检测器
-   - 微调YOLOv8: 用自动标注数据训练专用模型
+2. **Try other models**
+   - OWL-ViT: another strong zero-shot detector
+   - Fine-tune YOLOv8 on the auto-labeled data for a specialist model
 
-3. **prompt工程**
-   - 测试不同的文本描述
-   - 使用种类名称提高精度
+3. **Prompt engineering**
+   - Try different text phrasings
+   - Use species names to raise precision
 
-4. **后处理优化**
-   - 时序平滑（连续帧的检测一致性）
-   - 尺寸过滤（排除过小/过大的框）
+4. **Post-processing**
+   - Temporal smoothing (consistency across consecutive frames)
+   - Size filtering (drop boxes that are too small or too large)
 
-## 文件结构
+## File layout
 
 ```
-annotation-salmon/
-├── multi_model_annotator.py       # 核心标注系统（适配salmon）
-├── train_calibration.py           # 校准器训练（默认禁用MegaDetector）
-├── auto_annotator_gdino.py        # Grounding DINO包装器（通用）
-├── auto_annotator_detr.py         # DETR包装器（通用）
-├── auto_annotator_megadet.py      # MegaDetector（默认不使用）
-├── probability_calibrator.py      # 概率校准模块（通用）
-├── frame_extractor.py             # 视频帧提取（通用）
-├── visualize_labels.py            # 标注可视化（通用）
-└── README_SALMON.md              # 本文档
+annotation_salmon/
+├── multi_model_annotator.py       # core annotator (salmon-tuned)
+├── train_calibration.py           # calibrator training (MegaDetector off by default)
+├── auto_annotator_gdino.py        # Grounding DINO wrapper (shared)
+├── auto_annotator_detr.py         # DETR wrapper (shared)
+├── auto_annotator_megadet.py      # MegaDetector (off by default here)
+├── probability_calibrator.py      # calibration module (shared)
+├── frame_extractor.py             # video-frame extractor (shared)
+├── visualize_labels.py            # annotation visualizer (shared)
+└── README_SALMON.md               # this doc
 ```
 
-## 反馈与改进
+## Feedback and improvements
 
-这是从熊系统快速改编的版本。如果你发现：
-- 检测效果不理想
-- 特定场景问题
-- 需要新功能
+This is a quick adaptation of the bear system. If you notice:
+- Detection quality is suboptimal
+- Scene-specific issues
+- Need for new features
 
-请提交issue或联系开发团队。我们可以根据实际数据进一步优化。
+please file an issue or contact the dev team. We can tune further once we have real data.

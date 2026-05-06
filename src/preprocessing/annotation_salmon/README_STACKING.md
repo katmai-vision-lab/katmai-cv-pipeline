@@ -1,67 +1,67 @@
-# Stacking元学习器 - 多模型智能融合
+# Stacking Meta-Learner — Smart Multi-Model Fusion
 
-## 📖 什么是Stacking？
+## 📖 What is stacking?
 
-**Stacking (堆叠泛化)** 是一种先进的集成学习方法，通过**元学习器 (Meta-Learner)** 学习如何最佳组合多个基础模型的预测。
+**Stacking (stacked generalization)** is an advanced ensemble-learning method that uses a **meta-learner** to learn the best way to combine the predictions of several base models.
 
-### vs. 传统投票方法
+### vs. traditional voting
 
-| 方法 | 决策方式 | 优点 | 缺点 |
-|------|---------|------|------|
-| **简单投票** | 固定规则（如2/3同意） | 简单直接 | 无法适应数据，可能过松或过严 |
-| **加权投票** | 手工设置权重 | 灵活性好 | 需要专家知识，难以优化 |
-| **Stacking** ⭐ | 从数据学习最优策略 | 自适应，精度高 | 需要标注验证集 |
+| Method | Decision rule | Pros | Cons |
+|--------|---------------|------|------|
+| **Simple voting** | Fixed rule (e.g. 2/3 must agree) | Straightforward | Can't adapt to data; often too strict or too loose |
+| **Weighted voting** | Hand-set weights | Flexible | Needs expert knowledge; hard to optimize |
+| **Stacking** ⭐ | Learns the optimal rule from data | Adaptive, high accuracy | Requires a labeled validation set |
 
-### Stacking工作原理
+### How stacking works
 
 ```
-[图像] 
+[image]
    ↓
-[GDINO] [OWL-ViT] [Florence-2]  ← 基础模型
+[GDINO] [OWL-ViT] [Florence-2]   ← base models
    ↓        ↓          ↓
  box1     box2       box3
  conf1    conf2      conf3
    ↓        ↓          ↓
-   [特征提取: 11维特征向量]
+   [feature extraction: 11-dim feature vector]
    ↓
-[随机森林元学习器]  ← 从验证数据训练
+[Random Forest meta-learner]      ← trained on validation data
    ↓
-[TP或FP判断] + [置信度分数]
+[TP / FP decision] + [confidence score]
    ↓
-[最终检测结果]
+[final detections]
 ```
 
-## 🎯 特征设计 (11维)
+## 🎯 Feature design (11-d)
 
-Stacking提取以下特征来学习最优融合策略：
+Stacking extracts the following features to learn the optimal fusion strategy:
 
-1. **模型特征 (3维)**
-   - GDINO, OWL-ViT, Florence-2 的one-hot编码
-   - 学习每个模型的可靠性模式
+1. **Model identity (3-d)**
+   - One-hot for GDINO / OWL-ViT / Florence-2
+   - Lets the meta-learner learn each model's reliability pattern
 
-2. **置信度 (1维)**
-   - 原始模型输出的confidence score
-   - 高置信度≠一定正确（需要上下文）
+2. **Confidence (1-d)**
+   - Raw confidence score from the base model
+   - High confidence ≠ correct (context matters)
 
-3. **框大小 (2维)**
-   - 归一化的宽度和高度
-   - 学习：过大/过小的框可能是误检
+3. **Box size (2-d)**
+   - Normalized width and height
+   - Lets the meta-learner notice that very large or very small boxes tend to be false positives
 
-4. **框位置 (2维)**
-   - 归一化的中心坐标 (center_x, center_y)
-   - 学习：边缘位置vs中心位置的可靠性
+4. **Box position (2-d)**
+   - Normalized center (center_x, center_y)
+   - Lets the meta-learner discover edge-of-frame vs center reliability differences
 
-5. **模型一致性 (3维)**
-   - `max_iou`: 与其他模型的最大重叠度
-   - `num_overlaps`: 有多少其他模型也检测到这里
-   - `avg_overlap_conf`: 重叠检测的平均置信度
-   - **关键特征**：多模型一致性是最强信号
+5. **Multi-model agreement (3-d)**
+   - `max_iou`: max overlap with any other model's box
+   - `num_overlaps`: how many other models also detected something here
+   - `avg_overlap_conf`: average confidence of the overlapping detections
+   - **Key features** — multi-model agreement is the strongest signal
 
-## 🚀 使用步骤
+## 🚀 Usage
 
-### 1. 准备验证数据集
+### 1. Prepare a validation set
 
-你需要一个**人工标注的验证集**来训练Stacking模型。
+You need a **human-labeled validation set** to train the stacker.
 
 ```bash
 data/annotation/salmon/
@@ -72,17 +72,17 @@ data/annotation/salmon/
 │       └── ...
 └── labels/
     └── train/
-        ├── salmon_001.txt  # YOLO格式
+        ├── salmon_001.txt  # YOLO format
         ├── salmon_002.txt
         └── ...
 ```
 
-**最佳实践**：
-- 至少100-200张图像
-- 覆盖不同场景（光照、角度、跳跃高度）
-- 确保标注质量高
+**Best practices**:
+- At least 100–200 images
+- Cover diverse scenes (lighting, angle, jump height)
+- Annotation quality must be high
 
-### 2. 训练Stacking元学习器
+### 2. Train the stacking meta-learner
 
 ```bash
 cd /home/katmai/katmai-cv-pipeline
@@ -95,17 +95,17 @@ python3 -m src.preprocessing.annotation_salmon.train_stacking \
   --meta-learner rf
 ```
 
-**参数说明**：
-- `--images`: 验证图像目录
-- `--labels`: YOLO格式标签目录
-- `--output`: 输出stacker模型路径
-- `--prompt`: 检测提示词（与推理时保持一致）
-- `--meta-learner`: 元学习器类型
-  - `rf` (Random Forest) ⭐ 推荐 - 鲁棒，不易过拟合
-  - `gb` (Gradient Boosting) - 精度可能更高，但易过拟合
-  - `lr` (Logistic Regression) - 最简单，适合小数据集
+**Argument reference**:
+- `--images`: validation image directory
+- `--labels`: YOLO-format labels directory
+- `--output`: output stacker file path
+- `--prompt`: detection prompt (must match what you use at inference)
+- `--meta-learner`: meta-learner type
+  - `rf` (Random Forest) ⭐ recommended — robust, hard to overfit
+  - `gb` (Gradient Boosting) — potentially higher accuracy but easier to overfit
+  - `lr` (Logistic Regression) — simplest, suitable for very small datasets
 
-**输出示例**：
+**Example output**:
 ```
 [1/4] Loading base models...
 [2/4] Extracting features from validation set...
@@ -127,7 +127,7 @@ Validation Performance:
   AUC-ROC:   0.982
 
 Feature Importances:
-  num_overlaps: 0.287       ← 最重要！
+  num_overlaps: 0.287       ← most important!
   max_iou: 0.195
   avg_overlap_conf: 0.143
   confidence: 0.112
@@ -137,7 +137,7 @@ Saving stacking model to: models/stacker_salmon.pkl
 Done!
 ```
 
-### 3. 使用Stacking进行推理
+### 3. Run inference with the stacker
 
 ```bash
 python3 -m src.preprocessing.annotation_salmon.multi_model_annotator \
@@ -147,124 +147,124 @@ python3 -m src.preprocessing.annotation_salmon.multi_model_annotator \
   --stacker models/stacker_salmon.pkl
 ```
 
-**关键变化**：
-- 添加 `--stacker` 参数指定训练好的模型
-- `--min-agreement` 参数会被忽略（Stacking自己决策）
-- 不再需要人工审核队列（Stacking已过滤）
+**Key differences**:
+- Add `--stacker` to point at the trained model
+- `--min-agreement` is ignored (stacking makes its own decisions)
+- The human-review queue isn't strictly needed (the stacker already filters)
 
-## 📊 性能对比
+## 📊 Performance comparison
 
-基于我们的测试数据（85帧三文鱼视频）：
+On our test set (85 frames of salmon video):
 
-| 方法 | 覆盖率 | 检测数 | 精度 (预估) | 召回率 (预估) |
-|------|--------|--------|-------------|---------------|
-| **min-agreement=2** | 36.5% | 92 | ⭐⭐⭐⭐⭐ 高 | ⭐⭐ 低 |
-| **min-agreement=1** | 100% | 394 | ⭐⭐ 低 | ⭐⭐⭐⭐⭐ 高 |
-| **Stacking** ⭐ | ~85-95% | ~250 | ⭐⭐⭐⭐ 高 | ⭐⭐⭐⭐ 高 |
+| Method | Coverage | # detections | Precision (est.) | Recall (est.) |
+|--------|----------|-------------|------------------|---------------|
+| **min-agreement=2** | 36.5% | 92 | ⭐⭐⭐⭐⭐ high | ⭐⭐ low |
+| **min-agreement=1** | 100% | 394 | ⭐⭐ low | ⭐⭐⭐⭐⭐ high |
+| **Stacking** ⭐ | ~85–95% | ~250 | ⭐⭐⭐⭐ high | ⭐⭐⭐⭐ high |
 
-**Stacking优势**：
-- ✅ 平衡精度和召回率
-- ✅ 自动学习最优决策边界
-- ✅ 适应不同场景和模型组合
-- ✅ 无需手工调参
+**Why stacking wins**:
+- ✅ Balances precision and recall
+- ✅ Learns the optimal decision boundary automatically
+- ✅ Adapts to different scenes and model combos
+- ✅ No manual tuning required
 
-## 🔧 高级用法
+## 🔧 Advanced
 
-### 调整IoU阈值
+### Adjust the IoU threshold
 
 ```bash
 python3 -m src.preprocessing.annotation_salmon.train_stacking \
   --images ... \
   --labels ... \
   --output ... \
-  --iou-threshold 0.7  # 更严格的TP判定
+  --iou-threshold 0.7  # stricter TP definition
 ```
 
-### 尝试不同元学习器
+### Try a different meta-learner
 
 ```bash
-# Random Forest (推荐)
+# Random Forest (recommended)
 --meta-learner rf
 
-# Gradient Boosting (更高精度)
+# Gradient Boosting (potentially higher accuracy)
 --meta-learner gb
 
-# Logistic Regression (最快，小数据集)
+# Logistic Regression (fastest, small datasets)
 --meta-learner lr
 ```
 
-### 查看特征重要性
+### Inspect feature importances
 
-训练时会自动输出特征重要性，帮助理解模型决策：
+Training automatically prints feature importances so you can understand the model's decisions:
 
 ```
 Feature Importances:
-  num_overlaps: 0.287       # 最重要：其他模型是否也检测到
-  max_iou: 0.195            # 重要：与其他检测的重叠度
-  avg_overlap_conf: 0.143   # 重要：重叠检测的平均置信度
-  confidence: 0.112         # 中等：原始置信度
-  model_gdino: 0.089        # 较低：具体是哪个模型
+  num_overlaps: 0.287       # most important: do other models also detect this region?
+  max_iou: 0.195            # important: overlap with other detections
+  avg_overlap_conf: 0.143   # important: average confidence of overlapping detections
+  confidence: 0.112         # moderate: raw confidence
+  model_gdino: 0.089        # lower: which specific model is this
 ```
 
-## ⚠️ 注意事项
+## ⚠️ Caveats
 
-1. **需要标注数据**
-   - 至少100张高质量标注的图像
-   - 标注错误会直接影响Stacking性能
+1. **You need labeled data**
+   - At least 100 well-labeled images
+   - Labeling errors propagate directly into stacker performance
 
-2. **训练集和测试集分布要一致**
-   - 如果推理场景与训练场景差异大，Stacking可能表现不佳
-   - 建议：从实际应用场景采样验证集
+2. **Train and test distributions must match**
+   - If inference scenes differ a lot from training scenes, stacking may underperform
+   - Recommendation: sample your validation set from the actual deployment scenes
 
-3. **过拟合风险**
-   - 小数据集推荐使用Random Forest
-   - 避免使用过深的Gradient Boosting
+3. **Overfitting risk**
+   - With small datasets, prefer Random Forest
+   - Avoid very deep Gradient Boosting
 
-4. **计算时间**
-   - Stacking推理比简单投票慢约10-20%
-   - 特征提取需要额外计算
+4. **Compute cost**
+   - Stacking inference is ~10–20% slower than simple voting
+   - Feature extraction adds extra work
 
-## 💡 最佳实践建议
+## 💡 Best-practice recipes
 
-### 场景1：精度优先（论文、生产系统）
+### Scenario 1 — accuracy-first (paper, production)
 ```bash
-# 1. 收集200+张高质量标注数据
-# 2. 训练Random Forest stacker
+# 1. Collect 200+ high-quality labeled images
+# 2. Train a Random Forest stacker
 --meta-learner rf
 
-# 3. 验证精度>90%后部署
+# 3. Verify precision > 90% before deploying
 ```
 
-### 场景2：快速原型（探索阶段）
+### Scenario 2 — fast prototyping (exploration)
 ```bash
-# 使用min-agreement=2的简单投票
+# Use simple voting with min-agreement=2
 --min-agreement 2
 
-# 不需要额外标注，快速迭代
+# No extra labels needed, iterate quickly
 ```
 
-### 场景3：召回率优先（不能漏检）
+### Scenario 3 — recall-first (must not miss detections)
 ```bash
-# 训练Stacking，但调整决策阈值
-# (需要修改代码，使用predict_proba并设置低阈值)
+# Train stacking but adjust the decision threshold
+# (you'll need to modify the code to use predict_proba with a low threshold)
 ```
 
-## 📚 技术参考
+## 📚 Technical references
 
-- **论文**: "Stacked Generalization" (Wolpert, 1992)
-- **相关技术**:
+- **Paper**: "Stacked Generalization" (Wolpert, 1992)
+- **Related techniques**:
   - Weighted Boxes Fusion (WBF)
   - Non-Maximum Suppression (NMS)
   - Soft-NMS
 
-**为什么选择Stacking而不是WBF？**
-- WBF: 融合**重叠的框**，生成平均框
-- Stacking: 判断**每个框的真伪**，过滤假阳性
-- 我们的问题是"太多误检"而不是"框不准"，所以Stacking更适合
+**Why stacking instead of WBF?**
+- WBF fuses **overlapping boxes** into an average box
+- Stacking decides **whether each box is real or false**, filtering false positives
+- Our problem is "too many false detections," not "boxes are inaccurate" — so stacking fits better
 
-## 🎓 扩展阅读
+## 🎓 Further reading
 
-想深入了解多模型集成？查看这些资源：
-- Kaggle目标检测竞赛方案
-- COCO Detection Challenge技术报告
-- Ensemble Methods in Machine Learning (书籍)
+For multi-model ensembles in general:
+- Kaggle object-detection competition write-ups
+- COCO Detection Challenge technical reports
+- *Ensemble Methods in Machine Learning* (book)

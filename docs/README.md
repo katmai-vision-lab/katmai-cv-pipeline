@@ -33,7 +33,7 @@ This directory contains comprehensive documentation for the Katmai CV Pipeline p
 - Read: **[Bear Auto-Annotation System Report](bear_auto_annotation_system_report.md)**
 
 ### I want to... understand the technical differences
-- Compare: **[Salmon Report §6](salmon_auto_annotation_system_report.md#6-与熊系统的对比)** vs **[Bear Report](bear_auto_annotation_system_report.md)**
+- Compare: **[Salmon Report §6](salmon_auto_annotation_system_report.md#6-comparison-with-the-bear-system)** vs **[Bear Report](bear_auto_annotation_system_report.md)**
 
 ---
 

@@ -174,7 +174,7 @@ def train_calibration(
         device: cuda or cpu
     """
     print("=" * 80)
-    print("三文鱼跳跃检测 - 概率校准训练")
+    print("Salmon-jump detection — probability calibration training")
     print("=" * 80)
     print(f"Images: {images_dir}")
     print(f"Labels: {labels_dir}")

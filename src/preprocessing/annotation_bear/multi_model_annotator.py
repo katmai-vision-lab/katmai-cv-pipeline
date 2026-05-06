@@ -7,14 +7,14 @@ This module implements a multi-model annotation system that:
 3. Routes disagreements to human review
 
 Usage:
-    # 带人工审核队列（默认）
+    # With human-review queue (default)
     python -m src.preprocessing.multi_model_annotator \
         --input data/frames/video_name/ \
         --output data/consensus_labels/ \
         --review-queue data/review_queue/ \
         --prompt "bear"
     
-    # 自动批准模式（用于训练数据生成，不需要人工审核）
+    # Auto-approve mode (for training-data generation; no human review)
     python -m src.preprocessing.multi_model_annotator \
         --input data/frames/video_name/ \
         --output data/auto_labels/ \
@@ -111,12 +111,12 @@ class MultiModelAnnotator:
         # Load probability calibrator if provided
         self.calibrator = None
         if calibrator_path and Path(calibrator_path).exists():
-            print(f"\n加载概率校准器: {calibrator_path}")
+            print(f"\nLoading probability calibrator: {calibrator_path}")
             self.calibrator = ProbabilityCalibrator.load(Path(calibrator_path))
-            print("✓ 校准器加载成功")
+            print("✓ Calibrator loaded successfully")
         elif calibrator_path:
-            print(f"\n警告: 校准器文件未找到: {calibrator_path}")
-            print("将使用未校准的置信度分数")
+            print(f"\nWarning: calibrator file not found: {calibrator_path}")
+            print("Falling back to uncalibrated confidence scores")
 
         self.models = {}
         self.thresholds = {}
@@ -133,12 +133,12 @@ class MultiModelAnnotator:
         }
 
         print("\n" + "="*60)
-        print("初始化多模型标注系统")
+        print("Initializing multi-model annotation system")
         print("="*60)
 
-        # 串行加载模型，避免显存溢出
+        # Load models serially to avoid OOM
         if use_gdino:
-            print("\n[1/3] 加载 Grounding DINO Base...")
+            print("\n[1/3] Loading Grounding DINO Base...")
             self.models['gdino'] = GroundingDINOAnnotator(
                 model_id="IDEA-Research/grounding-dino-base",
                 device=device
@@ -148,7 +148,7 @@ class MultiModelAnnotator:
             gc.collect()
 
         if use_detr:
-            print("\n[2/3] 加载 DETR-ResNet-101...")
+            print("\n[2/3] Loading DETR-ResNet-101...")
             self.models['detr'] = DETRAnnotator(
                 model_id="facebook/detr-resnet-101",
                 device=device
@@ -158,7 +158,7 @@ class MultiModelAnnotator:
             gc.collect()
 
         if use_megadet:
-            print("\n[3/3] 加载 MegaDetector v5...")
+            print("\n[3/3] Loading MegaDetector v5...")
             self.models['megadet'] = MegaDetectorAnnotator(
                 device=device,
                 version="v5",
@@ -168,8 +168,8 @@ class MultiModelAnnotator:
             gc.collect()
 
         print("\n" + "="*60)
-        print(f"成功加载 {len(self.models)} 个模型!")
-        print(f"模型: {list(self.models.keys())}")
+        print(f"Successfully loaded {len(self.models)} model(s)!")
+        print(f"Models: {list(self.models.keys())}")
         print("="*60 + "\n")
 
     def annotate_image(
@@ -387,37 +387,37 @@ def auto_annotate_multi_model(
     calibrator_path: str = None,
 ):
     """
-    使用多模型对图像进行标注，并通过一致性检查提高标注质量。
+    Annotate images with multiple models, raising quality via a consensus check.
 
     Args:
-        input_dir: 输入图像目录
-        output_dir: 一致性标注结果输出目录
-        review_queue_dir: 需要人工审核的样本保存目录（auto_approve=True时不使用）
-        text_prompt: 检测目标文本提示
-        iou_threshold: IoU阈值，用于判断检测框是否匹配
-        min_agreement: 最少需要几个模型同意 (默认: 3个中2个)
-        limit: 最大处理图像数量
-        auto_approve: 自动批准模式，只保存达成共识的检测，跳过人工审核（用于训练数据生成）
-        calibrator_path: 校准器文件路径（可选，使用校准后的概率）
+        input_dir: input image directory
+        output_dir: where consensus-approved labels are written
+        review_queue_dir: where samples needing human review go (unused when auto_approve=True)
+        text_prompt: detection text prompt
+        iou_threshold: IoU threshold for considering two boxes a match
+        min_agreement: minimum number of models that must agree (default: 2 of 3)
+        limit: max number of images to process
+        auto_approve: auto-approve mode — keep only consensus detections, skip human review (for training data)
+        calibrator_path: optional path to a probability calibrator (use calibrated scores when provided)
     """
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     review_queue_dir = Path(review_queue_dir)
 
     if not input_dir.exists():
-        print(f"错误: 输入目录不存在: {input_dir}")
+        print(f"Error: input directory not found: {input_dir}")
         return
 
-    # 创建输出目录
+    # Create the output directory
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 只在非自动批准模式下创建review queue
+
+    # Only create the review queue when NOT in auto-approve mode
     if not auto_approve:
         review_queue_dir.mkdir(parents=True, exist_ok=True)
         (review_queue_dir / "images").mkdir(exist_ok=True)
         (review_queue_dir / "detections").mkdir(exist_ok=True)
 
-    # 初始化标注器
+    # Initialize the annotator
     annotator = MultiModelAnnotator(calibrator_path=calibrator_path)
 
     # Find all images
@@ -437,7 +437,7 @@ def auto_annotate_multi_model(
     if limit:
         image_files = image_files[:limit]
 
-    mode = "自动批准模式 (训练数据生成)" if auto_approve else "共识检查模式 (含人工审核)"
+    mode = "auto-approve (training-data generation)" if auto_approve else "consensus + human review"
     print(f"\nMulti-Model Auto Annotation with Consensus Checking")
     print(f"{'='*60}")
     print(f"Mode: {mode}")
@@ -480,11 +480,11 @@ def auto_annotate_multi_model(
 
         if requires_review:
             if auto_approve:
-                # 自动批准模式：忽略需要审核的，只保存有共识的
+                # Auto-approve mode: drop the ones needing review, keep only consensus
                 print(f"  ⚠️ Skipped (no consensus): {review_reason}")
                 stats["needs_review"] += 1
             else:
-                # 人工审核模式：保存到review queue
+                # Human-review mode: save to the review queue
                 print(f"  ⚠️  NEEDS REVIEW: {review_reason}")
                 stats["needs_review"] += 1
 
@@ -583,7 +583,7 @@ def main():
     parser.add_argument(
         "--auto-approve",
         action="store_true",
-        help="自动批准模式：只保存达成共识的检测，跳过人工审核（用于生成训练数据）"
+        help="Auto-approve mode: keep only consensus detections, skip human review (for training-data generation)"
     )
     parser.add_argument(
         "--calibrator",

@@ -7,14 +7,14 @@ This module implements a multi-model annotation system optimized for salmon:
 3. Routes disagreements to human review
 
 Usage:
-    # 带人工审核队列（默认）
+    # With human-review queue (default)
     python -m src.preprocessing.annotation_salmon.multi_model_annotator \
         --input data/frames/salmon_video/ \
         --output data/consensus_labels_salmon/ \
         --review-queue data/review_queue_salmon/ \
         --prompt "salmon"
     
-    # 自动批准模式（用于训练数据生成，不需要人工审核）
+    # Auto-approve mode (for training-data generation; no human review)
     python -m src.preprocessing.annotation_salmon.multi_model_annotator \
         --input data/frames/salmon_video/ \
         --output data/auto_labels_salmon/ \
@@ -127,23 +127,23 @@ class MultiModelAnnotator:
         # Load probability calibrator if provided
         self.calibrator = None
         if calibrator_path and Path(calibrator_path).exists():
-            print(f"\n加载概率校准器: {calibrator_path}")
+            print(f"\nLoading probability calibrator: {calibrator_path}")
             self.calibrator = ProbabilityCalibrator.load(Path(calibrator_path))
-            print("✓ 校准器加载成功")
-        
+            print("✓ Calibrator loaded successfully")
+
         # Load stacking meta-learner if provided
         self.stacker = None
         if stacker_path and Path(stacker_path).exists():
             import pickle
-            print(f"\n加载Stacking元学习器: {stacker_path}")
+            print(f"\nLoading stacking meta-learner: {stacker_path}")
             with open(stacker_path, 'rb') as f:
                 stacker_data = pickle.load(f)
             self.stacker = stacker_data['meta_learner']
-            print(f"✓ Stacking加载成功 (F1={stacker_data['metrics']['f1']:.3f})")
-            print("  使用机器学习优化的多模型融合策略")
+            print(f"✓ Stacking loaded successfully (F1={stacker_data['metrics']['f1']:.3f})")
+            print("  Using ML-optimized multi-model fusion strategy")
         elif calibrator_path:
-            print(f"\n警告: 校准器文件未找到: {calibrator_path}")
-            print("将使用未校准的置信度分数")
+            print(f"\nWarning: calibrator file not found: {calibrator_path}")
+            print("Falling back to uncalibrated confidence scores")
 
         self.models = {}
         self.thresholds = {}
@@ -163,85 +163,85 @@ class MultiModelAnnotator:
         }
 
         print("\n" + "="*80)
-        print("初始化三文鱼跳跃检测系统 (Grounding DINO + OWL-ViT v2 + Florence-2)")
+        print("Initializing salmon-jump detection system (Grounding DINO + OWL-ViT v2 + Florence-2)")
         print("="*80)
-        print("针对场景: 从水面跃出的三文鱼")
-        print("模型选择: 文本理解 + CLIP动作识别 + 复杂场景鲁棒性")
+        print("Target scene: salmon jumping out of the water")
+        print("Model rationale: text understanding + CLIP action recognition + robustness in complex scenes")
         print("="*80)
 
-        # 串行加载模型，避免显存溢出（RTX 2080 8GB）
-        # 加载顺序: 最常用 → 最不常用
+        # Load models serially to fit in 8 GB VRAM (RTX 2080)
+        # Loading order: most-used → least-used
         model_count = 0
         total_models = sum([use_gdino, use_owlvit, use_florence2, use_detr, use_megadet])
-        
+
         if use_gdino:
             model_count += 1
-            print(f"\n[{model_count}/{total_models}] 加载 Grounding DINO Base...")
+            print(f"\n[{model_count}/{total_models}] Loading Grounding DINO Base...")
             self.models['gdino'] = GroundingDINOAnnotator(
                 model_id="IDEA-Research/grounding-dino-base",
                 device=device
             )
             self.thresholds['gdino'] = gdino_threshold
-            print("   显存清理中...")
+            print("   Clearing GPU cache...")
             torch.cuda.empty_cache()
             gc.collect()
 
         if use_owlvit:
             model_count += 1
-            print(f"\n[{model_count}/{total_models}] 加载 OWL-ViT v2 Base Ensemble...")
-            print("   模型: google/owlv2-base-patch16-ensemble")
-            print("   特点: CLIP架构, 适合动作理解 (jumping, leaping)")
+            print(f"\n[{model_count}/{total_models}] Loading OWL-ViT v2 Base Ensemble...")
+            print("   Model: google/owlv2-base-patch16-ensemble")
+            print("   Strength: CLIP architecture, suited to action concepts (jumping, leaping)")
             self.models['owlvit'] = OWLViTAnnotator(
                 model_id="google/owlv2-base-patch16-ensemble",
                 device=device
             )
             self.thresholds['owlvit'] = owlvit_threshold
-            print("   显存清理中...")
+            print("   Clearing GPU cache...")
             torch.cuda.empty_cache()
             gc.collect()
 
         if use_florence2:
             model_count += 1
-            print(f"\n[{model_count}/{total_models}] 加载 Florence-2 Base...")
-            print("   模型: microsoft/Florence-2-base")
-            print("   特点: 最新VLM, 对水花/反光鲁棒")
+            print(f"\n[{model_count}/{total_models}] Loading Florence-2 Base...")
+            print("   Model: microsoft/Florence-2-base")
+            print("   Strength: latest VLM, robust to water splash and reflections")
             self.models['florence2'] = Florence2Annotator(
                 model_size="base",
                 device=device
             )
             self.thresholds['florence2'] = florence2_threshold
-            print("   显存清理中...")
+            print("   Clearing GPU cache...")
             torch.cuda.empty_cache()
             gc.collect()
 
         if use_detr:
             model_count += 1
-            print(f"\n[{model_count}/{total_models}] 加载 DETR-ResNet-101...")
+            print(f"\n[{model_count}/{total_models}] Loading DETR-ResNet-101...")
             self.models['detr'] = DETRAnnotator(
                 model_id="facebook/detr-resnet-101",
                 device=device
             )
             self.thresholds['detr'] = detr_threshold
-            print("   显存清理中...")
+            print("   Clearing GPU cache...")
             torch.cuda.empty_cache()
             gc.collect()
 
         if use_megadet:
             model_count += 1
-            print(f"\n[{model_count}/{total_models}] 加载 MegaDetector v5...")
+            print(f"\n[{model_count}/{total_models}] Loading MegaDetector v5...")
             self.models['megadet'] = MegaDetectorAnnotator(
                 device=device,
                 version="v5",
             )
             self.thresholds['megadet'] = megadet_threshold
-            print("   显存清理中...")
+            print("   Clearing GPU cache...")
             torch.cuda.empty_cache()
             gc.collect()
 
         print("\n" + "="*80)
-        print(f"✓ 成功加载 {len(self.models)} 个模型!")
-        print(f"  激活模型: {list(self.models.keys())}")
-        print(f"  模型权重: {', '.join([f'{k}={v:.2f}' for k, v in self.model_weights.items() if v > 0])}")
+        print(f"✓ Successfully loaded {len(self.models)} model(s)!")
+        print(f"  Active models: {list(self.models.keys())}")
+        print(f"  Model weights: {', '.join([f'{k}={v:.2f}' for k, v in self.model_weights.items() if v > 0])}")
         print("="*80 + "\n")
 
     def annotate_image(
@@ -589,38 +589,38 @@ def auto_annotate_multi_model(
     florence2_threshold: float = 0.3,
 ):
     """
-    使用多模型对图像进行标注，并通过一致性检查提高标注质量。
+    Annotate images with multiple models, raising quality via a consensus check.
 
     Args:
-        input_dir: 输入图像目录
-        output_dir: 一致性标注结果输出目录
-        review_queue_dir: 需要人工审核的样本保存目录（auto_approve=True时不使用）
-        text_prompt: 检测目标文本提示
-        iou_threshold: IoU阈值，用于判断检测框是否匹配
-        min_agreement: 最少需要几个模型同意 (默认: 3个中2个, Stacking时忽略)
-        limit: 最大处理图像数量
-        auto_approve: 自动批准模式，只保存达成共识的检测，跳过人工审核（用于训练数据生成）
-        calibrator_path: 校准器文件路径（可选，使用校准后的概率）
-        stacker_path: Stacking元学习器文件路径（可选，使用ML优化的多模型融合）
+        input_dir: input image directory
+        output_dir: where consensus-approved labels are written
+        review_queue_dir: where samples needing human review go (unused when auto_approve=True)
+        text_prompt: detection text prompt
+        iou_threshold: IoU threshold for considering two boxes a match
+        min_agreement: minimum number of models that must agree (default: 2 of 3; ignored when stacking is used)
+        limit: max number of images to process
+        auto_approve: auto-approve mode — keep only consensus detections, skip human review (for training data)
+        calibrator_path: optional path to a probability calibrator
+        stacker_path: optional path to a stacking meta-learner (use ML-optimized fusion)
     """
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     review_queue_dir = Path(review_queue_dir)
 
     if not input_dir.exists():
-        print(f"错误: 输入目录不存在: {input_dir}")
+        print(f"Error: input directory not found: {input_dir}")
         return
 
-    # 创建输出目录
+    # Create the output directory
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 只在非自动批准模式下创建review queue
+
+    # Only create the review queue when NOT in auto-approve mode
     if not auto_approve:
         review_queue_dir.mkdir(parents=True, exist_ok=True)
         (review_queue_dir / "images").mkdir(exist_ok=True)
         (review_queue_dir / "detections").mkdir(exist_ok=True)
 
-    # 初始化标注器
+    # Initialize the annotator
     annotator = MultiModelAnnotator(
         calibrator_path=calibrator_path,
         stacker_path=stacker_path,
@@ -646,7 +646,7 @@ def auto_annotate_multi_model(
     if limit:
         image_files = image_files[:limit]
 
-    mode = "自动批准模式 (训练数据生成)" if auto_approve else "共识检查模式 (含人工审核)"
+    mode = "auto-approve (training-data generation)" if auto_approve else "consensus + human review"
     print(f"\nMulti-Model Auto Annotation with Consensus Checking")
     print(f"{'='*60}")
     print(f"Mode: {mode}")
@@ -692,11 +692,11 @@ def auto_annotate_multi_model(
 
         if requires_review:
             if auto_approve:
-                # 自动批准模式：忽略需要审核的，只保存有共识的
+                # Auto-approve mode: drop the ones needing review, keep only consensus
                 print(f"  ⚠️ Skipped (no consensus): {review_reason}")
                 stats["needs_review"] += 1
             else:
-                # 人工审核模式：保存到review queue
+                # Human-review mode: save to the review queue
                 print(f"  ⚠️  NEEDS REVIEW: {review_reason}")
                 stats["needs_review"] += 1
 
@@ -795,7 +795,7 @@ def main():
     parser.add_argument(
         "--auto-approve",
         action="store_true",
-        help="自动批准模式：只保存达成共识的检测，跳过人工审核（用于生成训练数据）"
+        help="Auto-approve mode: keep only consensus detections, skip human review (for training-data generation)"
     )
     parser.add_argument(
         "--calibrator",

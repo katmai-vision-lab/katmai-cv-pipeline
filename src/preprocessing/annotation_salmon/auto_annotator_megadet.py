@@ -182,20 +182,20 @@ def auto_annotate_megadet(
     limit: int = None,
 ):
     """
-    使用 MegaDetector v5 对图像进行自动标注。
+    Auto-annotate images using MegaDetector v5.
 
     Args:
-        input_dir: 输入图像目录
-        output_dir: 输出 YOLO 格式标签目录
-        threshold: 置信度阈值 (default: 0.3)
-        output_class: 输出标签的类别 ID (default: 0)
-        limit: 最大处理图像数量
+        input_dir: input image directory
+        output_dir: output directory for YOLO-format labels
+        threshold: confidence threshold (default: 0.3)
+        output_class: class id to write into the output labels (default: 0)
+        limit: max number of images to process
     """
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
 
     if not input_dir.exists():
-        print(f"错误: 输入目录不存在: {input_dir}")
+        print(f"Error: input directory not found: {input_dir}")
         return 0, 0, 0
 
     output_dir.mkdir(parents=True, exist_ok=True)
