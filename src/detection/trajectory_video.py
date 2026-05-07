@@ -93,18 +93,12 @@ def build_per_frame_index(bears_dict):
 
 
 def draw_trail(frame, trail_points, color, thickness):
-    """Draw a fading polyline. Older points are dimmer/thinner."""
+    """Draw a polyline at full brightness (entire trail stays visible)."""
     if len(trail_points) < 2:
         return
-    n = len(trail_points)
-    for i in range(1, n):
-        t = i / n  # 0 (oldest) -> 1 (newest)
-        # Fade: blend toward black for older points.
-        c = tuple(int(ch * (0.25 + 0.75 * t)) for ch in color)
-        thick = max(1, int(round(thickness * (0.4 + 0.6 * t))))
-        p0 = trail_points[i - 1]
-        p1 = trail_points[i]
-        cv2.line(frame, p0, p1, c, thick, lineType=cv2.LINE_AA)
+    pts = np.array(trail_points, dtype=np.int32).reshape(-1, 1, 2)
+    cv2.polylines(frame, [pts], isClosed=False, color=color,
+                  thickness=thickness, lineType=cv2.LINE_AA)
 
 
 def draw_legend(frame, bear_ids, font_scale=0.6):
