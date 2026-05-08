@@ -702,6 +702,19 @@ python src/detection/salmons/visualize_salmon_jumps.py data/raw/salmons/salmon_j
 ### Parameters
 ![alt text](/docs/images/salmon-params.png)
 
+## Background Filter + OpenCV
+### Usage with opions
+# Step 1: run interactively, watch the mask, tune trackbars
+python src/detection/salmons/salmon_jump_counter_bg.py --video data/raw/salmons/salmon_jump_9.mov
+
+# Step 2: re-run with the values printed in the terminal (no interactive steps)
+python src/detection/salmons/salmon_jump_counter_bg.py --video data/raw/salmons/salmon_jump_9.mov \
+  --roi 434,720,710,1062 \
+  --line-y 850 \
+  --var-threshold 40\
+  --min-area 300 \
+  --output data/raw/salmons/salmon_jump_9_result.mp4
+
 ## Useful Link
 SharePoint:s
 https://uwnetid.sharepoint.com/sites/katmai-vision-lab/Shared%20Documents/Forms/AllItems.aspx
