@@ -150,18 +150,21 @@ def _menu() -> str:
     c.print()
     t = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
     t.add_column(style="bold cyan", width=4)
-    t.add_column(style="white", min_width=16)
+    t.add_column(style="white", min_width=20)
     t.add_column(style="dim")
-    t.add_row("1", "Track bears",    "ByteTrack · annotated output video with bounding boxes")
-    t.add_row("2", "Count bears",    "per-video bear counts · optional unique-bear tracking")
-    t.add_row("3", "Evaluate model", "mAP · precision · recall · counting accuracy vs ground truth")
-    t.add_row("4", "Train model",    "fine-tune YOLOv8n on a new labeled dataset")
+    t.add_row("1", "Track bears",          "ByteTrack · annotated output video with bounding boxes")
+    t.add_row("2", "Count bears",          "per-video bear counts · optional unique-bear tracking")
+    t.add_row("3", "Detect feeding events","VLM frame analysis · timestamped behavior JSON")
+    t.add_row("4", "Count salmon jumps",   "CV-based jump detection · jump count + timestamps")
+    t.add_row("5", "Fetch weather data",   "RAWS stations · wind · temperature · precipitation")
+    t.add_row("6", "Evaluate model",       "mAP · precision · recall · counting accuracy vs ground truth")
+    t.add_row("7", "Train model",          "fine-tune YOLOv8n on a new labeled dataset")
     t.add_row("q", "Quit", "")
     c.print(Panel(t, title="[bold]Main Menu[/bold]", border_style="cyan", padding=(0, 1)))
-    c.print(f"\n  [cyan]Select[/cyan]  [dim](1/2/3/4/q)[/dim] : ", end="")
+    c.print(f"\n  [cyan]Select[/cyan]  [dim](1/2/3/4/5/6/7/q)[/dim] : ", end="")
     while True:
         ch = _getch()
-        if ch in "1234q":
+        if ch in "1234567q":
             c.print(ch)
             return ch
 
@@ -293,7 +296,188 @@ def _show_count_results(res: dict):
                 f"time {agg.get('total_processing_time',0):.1f}s[/dim]")
 
 
-# ── 3. Evaluate ───────────────────────────────────────────────────────────────
+# ── 3. Detect feeding events ─────────────────────────────────────────────────
+
+def detect_feeding():
+    c.print(); _header("Detect Feeding Events",
+                       "YOLO + ByteTrack  ·  VLM frame analysis  ·  timestamped behavior JSON")
+
+    video = _pick_video()
+    if not video: return _err("No video selected.")
+
+    backend = _key("VLM backend", "maog", "m")
+    # m=molmo2, a=anthropic, o=openai, g=gemini
+    backend_map = {"m": "molmo2", "a": "anthropic", "o": "openai", "g": "gemini"}
+    backend_name = backend_map[backend]
+
+    model    = _ask("YOLO weights",  MODEL,  "path to .pt bear detector weights")
+    interval = float(_ask("Sample interval", "0.5", "analyze one frame every N seconds"))
+    conf     = float(_ask("Confidence",      "0.25","min detection score  (0–1)"))
+
+    c.print()
+    _config({"video": Path(video).name, "backend": backend_name,
+             "interval": f"{interval}s", "confidence": conf})
+
+    if not _confirm("Run?"):
+        return
+
+    _step(f"Starting analysis with {backend_name} backend…")
+    c.print("  [dim]Progress will appear below. This may take several minutes.[/dim]\n")
+    try:
+        from src.behavior.analyze_feeding import run as run_feeding
+        json_path = run_feeding(
+            video_path=video,
+            interval=interval,
+            model=model,
+            conf=conf,
+            backend=backend_name,
+        )
+        _ok(f"Analysis saved → {json_path}")
+        c.print(f"\n  [dim]View with:[/dim]  python -m src.behavior.feeding_viewer "
+                f"--video \"{Path(video).name}\" --analysis \"{json_path}\"")
+    except KeyboardInterrupt:
+        c.print("\n  [yellow]Cancelled.[/yellow]")
+    except Exception as e:
+        _err(str(e))
+
+
+# ── 4. Count salmon jumps ─────────────────────────────────────────────────────
+
+def count_salmon_jumps():
+    c.print(); _header("Count Salmon Jumps",
+                       "CV blob detection  ·  jump count + timestamps  ·  JSON output")
+
+    video = _pick_video()
+    if not video: return _err("No video selected.")
+
+    c.print("\n  [dim]Tip: default config works well for Brooks Falls footage.[/dim]")
+    custom = _confirm("Customise detection parameters?", default=False)
+
+    cfg_path = None
+    if custom:
+        cfg_path = _ask("Config JSON path", "", "optional — leave blank for built-in defaults")
+        cfg_path = cfg_path or None
+
+    debug = _confirm("Save debug frames?", default=False)
+
+    c.print()
+    _config({"video": Path(video).name,
+             "config": cfg_path or "(defaults)",
+             "debug_frames": debug})
+
+    if not _confirm("Run?"):
+        return
+
+    out_dir = PREDICTIONS_DIR / "salmon_jumps"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    debug_dir = str(out_dir / f"{Path(video).stem}_debug") if debug else None
+
+    _step("Running salmon jump counter…")
+    try:
+        from src.detection.salmons.salmon_jump_counter_cv import (
+            SalmonConfig, count_salmon_jumps as _count,
+        )
+        import json as _json
+
+        cfg = SalmonConfig.from_file(cfg_path) if cfg_path else SalmonConfig()
+        result = _count(video, cfg, debug_output=debug_dir)
+
+        out_path = out_dir / f"{Path(video).stem}_jumps.json"
+        with open(out_path, "w") as f:
+            _json.dump(result, f, indent=2)
+
+        t = Table(box=box.ROUNDED, border_style="cyan")
+        t.add_column("Metric", style="cyan")
+        t.add_column("Value",  style="bold green", justify="right")
+        t.add_row("Jump count",  str(result["jump_count"]))
+        t.add_row("Video FPS",   f"{result['fps']:.1f}")
+        t.add_row("Sample rate", f"every {result['sample_rate']} frames")
+        c.print(); c.print(t)
+
+        if result["jump_timestamps_sec"]:
+            c.print(f"\n  [dim]Timestamps (s):[/dim] "
+                    f"{', '.join(str(t) for t in result['jump_timestamps_sec'][:10])}"
+                    + (" …" if len(result["jump_timestamps_sec"]) > 10 else ""))
+
+        _ok(f"Saved → {out_path}")
+    except KeyboardInterrupt:
+        c.print("\n  [yellow]Cancelled.[/yellow]")
+    except Exception as e:
+        _err(str(e))
+
+
+# ── 5. Fetch weather data ─────────────────────────────────────────────────────
+
+def fetch_weather():
+    c.print(); _header("Fetch Weather Data",
+                       "NPS RAWS stations  ·  wind · temperature · humidity · precipitation")
+
+    from src.environment.raws_weather import STATIONS
+    import json as _json
+
+    c.print("\n  [dim]Available stations:[/dim]")
+    t = Table(box=None, show_header=False, padding=(0, 1))
+    t.add_column(style="bold cyan", width=6)
+    t.add_column(style="white", min_width=16)
+    t.add_column(style="dim")
+    station_keys = list(STATIONS)
+    for i, (sid, info) in enumerate(STATIONS.items(), 1):
+        t.add_row(str(i), info["name"], f"{info['dist_km']} km · {sid}")
+    t.add_row("a", "All stations", "fetch ATHF + ACOV + APFA")
+    c.print(t); c.print()
+
+    valid = "".join(str(i) for i in range(1, len(station_keys) + 1)) + "a"
+    c.print(f"  [cyan]Station[/cyan]  [dim]({'/'.join(valid)})[/dim] : ", end="")
+    while True:
+        ch = _getch().lower()
+        if ch in valid:
+            c.print(ch)
+            break
+
+    selected = None if ch == "a" else [station_keys[int(ch) - 1]]
+    station_label = "all stations" if ch == "a" else STATIONS[station_keys[int(ch)-1]]["name"]
+
+    date_str = _ask("Date", "2023-07-15", "YYYY-MM-DD  (bear season: Jul–Sep)")
+    fmt      = _key("Output format", "jc", "j")  # j=json, c=csv
+    fmt_name = "json" if fmt == "j" else "csv"
+
+    c.print()
+    _config({"station": station_label, "date": date_str, "format": fmt_name})
+
+    if not _confirm("Fetch?"):
+        return
+
+    _step("Fetching from RAWS…")
+    try:
+        from datetime import datetime as _dt
+        d = _dt.strptime(date_str, "%Y-%m-%d")
+        from src.environment.raws_weather import fetch_day, save_json, save_csv
+        data = fetch_day(d.year, d.month, d.day, station_ids=selected)
+
+        out_dir = PREDICTIONS_DIR / "raws_weather"
+        sid_label = "all-stations" if ch == "a" else station_keys[int(ch) - 1]
+        out_path  = out_dir / f"{date_str}_{sid_label}.{fmt_name}"
+
+        if fmt_name == "csv":
+            save_csv(data, out_path)
+        else:
+            save_json(data, out_path)
+
+        total = sum(len(v) for v in data["stations"].values())
+        _ok(f"Saved {total} hourly rows → {out_path}")
+
+        if data["errors"]:
+            for sid, msg in data["errors"].items():
+                _err(f"{sid}: {msg}")
+    except ValueError:
+        _err(f"Invalid date format: '{date_str}'. Use YYYY-MM-DD.")
+    except KeyboardInterrupt:
+        c.print("\n  [yellow]Cancelled.[/yellow]")
+    except Exception as e:
+        _err(str(e))
+
+
+# ── 6. Evaluate ───────────────────────────────────────────────────────────────
 
 def evaluate():
     c.print(); _header("Evaluate Model", "mAP · precision · recall · counting accuracy")
@@ -413,7 +597,15 @@ def train():
 
 def main():
     _welcome()
-    dispatch = {"1": track_bears, "2": count_bears, "3": evaluate, "4": train}
+    dispatch = {
+        "1": track_bears,
+        "2": count_bears,
+        "3": detect_feeding,
+        "4": count_salmon_jumps,
+        "5": fetch_weather,
+        "6": evaluate,
+        "7": train,
+    }
     while True:
         try:
             ch = _menu()
