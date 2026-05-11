@@ -132,6 +132,51 @@ def parse_response(raw, bear_boxes):
     return behaviors
 
 
+def count_salmon_catches(entries):
+    """
+    Walk per-bear state timelines and count salmon catches.
+
+    catch_attempt   = transition into CATCHING from WAITING/LUNGING
+    confirmed_catch = CATCHING -> EATING  (bear secured the fish)
+    missed_catch    = CATCHING -> anything other than EATING
+    """
+    stage_re = re.compile(r"\[([A-Z]+)\]")
+
+    def get_stage(beh):
+        m = stage_re.search(beh or "")
+        return m.group(1) if m else None
+
+    bear_timelines: dict = {}
+    for e in entries:
+        t = e["timestamp_sec"]
+        for bid_str, bear in e["bears"].items():
+            stage = get_stage(bear.get("behavior", ""))
+            if stage:
+                bear_timelines.setdefault(int(bid_str), []).append((t, stage))
+
+    results = {}
+    for bid, timeline in bear_timelines.items():
+        attempts, confirmed, missed = 0, 0, 0
+        timestamps = []
+        prev = None
+        for t, stage in timeline:
+            if stage == "CATCHING" and prev != "CATCHING":
+                attempts += 1
+                timestamps.append(round(t, 2))
+            elif stage == "EATING" and prev == "CATCHING":
+                confirmed += 1
+            elif prev == "CATCHING" and stage not in ("CATCHING", "EATING"):
+                missed += 1
+            prev = stage
+        results[bid] = {
+            "catch_attempts":       attempts,
+            "confirmed_catches":    confirmed,
+            "missed_catches":       missed,
+            "catch_timestamps_sec": timestamps,
+        }
+    return results
+
+
 def generate_summary(backend, entries, video_path):
     """Produce a narrative summary of feeding events across the whole video."""
     if not entries:
@@ -240,14 +285,17 @@ def _run_analysis(args, video_path, json_path, frames_dir):
     print(f"Vision model : {args.vision_model or '(backend default)'}")
     print("=" * 60)
 
-    out_dir = json_path.parent
-    tracking_cache_path = out_dir / "tracking_cache.json"
-    progress_path       = out_dir / "entries_progress.jsonl"
+    out_dir       = json_path.parent
+    progress_path = out_dir / "entries_progress.jsonl"
 
     # ── Steps 1+2: ByteTrack + merge ─────────────────────────────────────────
-    if tracking_cache_path.exists():
-        print(f"\n[1/3] Loading cached tracking results (delete {tracking_cache_path.name} to re-track)...")
-        with open(tracking_cache_path) as f:
+    # Use the canonical cache shared with track_and_save_video so a prior
+    # bear-tracking run on the same video skips ByteTrack entirely here.
+    canonical_cache = BearDetector.canonical_tracking_cache(video_path)
+
+    if canonical_cache.exists():
+        print(f"\n[1/3] Loading cached tracking results ({canonical_cache})...")
+        with open(canonical_cache) as f:
             cache = json.load(f)
         src_fps      = cache["src_fps"]
         total_frames = cache["total_frames"]
@@ -270,68 +318,11 @@ def _run_analysis(args, video_path, json_path, frames_dir):
         frame_h      = int(cap_probe.get(cv2.CAP_PROP_FRAME_HEIGHT))
         cap_probe.release()
 
-        tracker_cfg = str(TRACKERS_CONFIG_DIR / "bytetrack.yaml")
-        results_stream = detector.model.track(
-            source=str(video_path),
-            conf=args.conf,
-            iou=args.iou,
-            classes=[0],
-            tracker=tracker_cfg,
-            save=False,
-            stream=True,
-            verbose=False,
-            persist=True,
+        display_frame_boxes = detector.compute_display_boxes(
+            video_path, conf=args.conf, iou=args.iou,
+            show_progress=True, cache_path=canonical_cache,
         )
-
-        frame_data  = []
-        frame_boxes = []
-        for result in tqdm(results_stream, total=total_frames, desc="  Tracking"):
-            track_ids, track_positions, box_data = [], {}, {}
-            if result.boxes.id is not None:
-                track_ids = result.boxes.id.cpu().numpy().astype(int).tolist()
-                xyxy  = result.boxes.xyxy.cpu().numpy()
-                xywh  = result.boxes.xywh.cpu().numpy()
-                confs = result.boxes.conf.cpu().numpy()
-                for i, tid in enumerate(track_ids):
-                    track_positions[tid] = (float(xywh[i][0]), float(xywh[i][1]))
-                    box_data[tid] = (
-                        int(xyxy[i][0]), int(xyxy[i][1]),
-                        int(xyxy[i][2]), int(xyxy[i][3]),
-                        float(confs[i]),
-                    )
-            frame_data.append({
-                "frame": len(frame_data),
-                "track_ids": track_ids,
-                "track_positions": track_positions,
-            })
-            frame_boxes.append(box_data)
-
         print("\n[2/3] Merging fragmented tracks...")
-        _, id_map = detector._merge_fragmented_tracks(frame_data)
-        unique_groups   = sorted(set(id_map.values()))
-        group_to_display = {g: i + 1 for i, g in enumerate(unique_groups)}
-
-        display_frame_boxes = []
-        for raw_boxes in frame_boxes:
-            disp = {}
-            for raw_id, bbox in raw_boxes.items():
-                gid = id_map.get(raw_id, raw_id)
-                did = group_to_display.get(gid, raw_id)
-                disp[did] = bbox
-            display_frame_boxes.append(disp)
-
-        with open(tracking_cache_path, "w") as f:
-            json.dump({
-                "src_fps":      src_fps,
-                "total_frames": total_frames,
-                "frame_w":      frame_w,
-                "frame_h":      frame_h,
-                "display_frame_boxes": [
-                    {str(k): list(v) for k, v in frame.items()}
-                    for frame in display_frame_boxes
-                ],
-            }, f)
-        print(f"  ✓ Tracking cache saved → {tracking_cache_path.name}")
 
     # ── Step 3: VLM analysis ──────────────────────────────────────────────────
     print(f"\n[3/3] Running vision model (every {args.interval}s, backend={args.backend})...")
@@ -445,6 +436,8 @@ def _run_analysis(args, video_path, json_path, frames_dir):
     summary = generate_summary(backend, entries, video_path)
     print(f"\nSummary:\n{summary}\n")
 
+    salmon_counts = count_salmon_catches(entries)
+
     output_data = {
         "video": str(video_path),
         "fps": src_fps,
@@ -456,11 +449,18 @@ def _run_analysis(args, video_path, json_path, frames_dir):
         "vision_model": args.vision_model or backend.name,
         "created": datetime.now().isoformat(),
         "summary": summary,
+        "salmon_counts": {str(k): v for k, v in salmon_counts.items()},
         "entries": entries,
     }
     with open(json_path, "w") as f:
         json.dump(output_data, f, indent=2)
 
+    print("\nSalmon catch summary:")
+    for bid, counts in sorted(salmon_counts.items()):
+        print(f"  Bear {bid}: {counts['confirmed_catches']} confirmed catch(es), "
+              f"{counts['catch_attempts']} attempt(s), "
+              f"{counts['missed_catches']} miss(es)  "
+              f"@ {counts['catch_timestamps_sec']}")
     print(f"\n✓ Done. {len(entries)} entries saved to: {json_path}")
     print(f"\nNext step:")
     print(f"  python -m src.behavior.feeding_viewer --video \"{video_path}\" --analysis \"{json_path}\"")
