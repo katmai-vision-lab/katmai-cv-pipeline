@@ -240,76 +240,126 @@ def _run_analysis(args, video_path, json_path, frames_dir):
     print(f"Vision model : {args.vision_model or '(backend default)'}")
     print("=" * 60)
 
-    print("\n[1/3] Running YOLO + ByteTrack...")
-    detector = BearDetector(model_path=args.model)
+    out_dir = json_path.parent
+    tracking_cache_path = out_dir / "tracking_cache.json"
+    progress_path       = out_dir / "entries_progress.jsonl"
 
-    cap_probe = cv2.VideoCapture(str(video_path))
-    src_fps = cap_probe.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = int(cap_probe.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_w = int(cap_probe.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_h = int(cap_probe.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    cap_probe.release()
+    # ── Steps 1+2: ByteTrack + merge ─────────────────────────────────────────
+    if tracking_cache_path.exists():
+        print(f"\n[1/3] Loading cached tracking results (delete {tracking_cache_path.name} to re-track)...")
+        with open(tracking_cache_path) as f:
+            cache = json.load(f)
+        src_fps      = cache["src_fps"]
+        total_frames = cache["total_frames"]
+        frame_w      = cache["frame_w"]
+        frame_h      = cache["frame_h"]
+        display_frame_boxes = [
+            {int(k): tuple(v) for k, v in frame.items()}
+            for frame in cache["display_frame_boxes"]
+        ]
+        print(f"  ✓ {len(display_frame_boxes)} frames loaded from cache")
+        print("\n[2/3] Skipped (cached).")
+    else:
+        print("\n[1/3] Running YOLO + ByteTrack...")
+        detector = BearDetector(model_path=args.model)
 
-    tracker_cfg = str(TRACKERS_CONFIG_DIR / "bytetrack.yaml")
-    results_stream = detector.model.track(
-        source=str(video_path),
-        conf=args.conf,
-        iou=args.iou,
-        classes=[0],
-        tracker=tracker_cfg,
-        save=False,
-        stream=True,
-        verbose=False,
-        persist=True,
-    )
+        cap_probe = cv2.VideoCapture(str(video_path))
+        src_fps      = cap_probe.get(cv2.CAP_PROP_FPS) or 30.0
+        total_frames = int(cap_probe.get(cv2.CAP_PROP_FRAME_COUNT))
+        frame_w      = int(cap_probe.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_h      = int(cap_probe.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap_probe.release()
 
-    frame_data = []
-    frame_boxes = []
+        tracker_cfg = str(TRACKERS_CONFIG_DIR / "bytetrack.yaml")
+        results_stream = detector.model.track(
+            source=str(video_path),
+            conf=args.conf,
+            iou=args.iou,
+            classes=[0],
+            tracker=tracker_cfg,
+            save=False,
+            stream=True,
+            verbose=False,
+            persist=True,
+        )
 
-    # Do NOT store raw frames — 60fps × 1080p × 3 channels ≈ 6 MB/frame → OOM at scale.
-    # Frames are read on demand during the VLM sampling pass below.
-    for result in tqdm(results_stream, total=total_frames, desc="  Tracking"):
-        track_ids, track_positions, box_data = [], {}, {}
-        if result.boxes.id is not None:
-            track_ids = result.boxes.id.cpu().numpy().astype(int).tolist()
-            xyxy = result.boxes.xyxy.cpu().numpy()
-            xywh = result.boxes.xywh.cpu().numpy()
-            confs = result.boxes.conf.cpu().numpy()
-            for i, tid in enumerate(track_ids):
-                track_positions[tid] = (float(xywh[i][0]), float(xywh[i][1]))
-                box_data[tid] = (
-                    int(xyxy[i][0]), int(xyxy[i][1]),
-                    int(xyxy[i][2]), int(xyxy[i][3]),
-                    float(confs[i]),
-                )
-        frame_data.append({
-            "frame": len(frame_data),
-            "track_ids": track_ids,
-            "track_positions": track_positions,
-        })
-        frame_boxes.append(box_data)
+        frame_data  = []
+        frame_boxes = []
+        for result in tqdm(results_stream, total=total_frames, desc="  Tracking"):
+            track_ids, track_positions, box_data = [], {}, {}
+            if result.boxes.id is not None:
+                track_ids = result.boxes.id.cpu().numpy().astype(int).tolist()
+                xyxy  = result.boxes.xyxy.cpu().numpy()
+                xywh  = result.boxes.xywh.cpu().numpy()
+                confs = result.boxes.conf.cpu().numpy()
+                for i, tid in enumerate(track_ids):
+                    track_positions[tid] = (float(xywh[i][0]), float(xywh[i][1]))
+                    box_data[tid] = (
+                        int(xyxy[i][0]), int(xyxy[i][1]),
+                        int(xyxy[i][2]), int(xyxy[i][3]),
+                        float(confs[i]),
+                    )
+            frame_data.append({
+                "frame": len(frame_data),
+                "track_ids": track_ids,
+                "track_positions": track_positions,
+            })
+            frame_boxes.append(box_data)
 
-    print("\n[2/3] Merging fragmented tracks...")
-    _, id_map = detector._merge_fragmented_tracks(frame_data)
-    unique_groups = sorted(set(id_map.values()))
-    group_to_display = {g: i + 1 for i, g in enumerate(unique_groups)}
+        print("\n[2/3] Merging fragmented tracks...")
+        _, id_map = detector._merge_fragmented_tracks(frame_data)
+        unique_groups   = sorted(set(id_map.values()))
+        group_to_display = {g: i + 1 for i, g in enumerate(unique_groups)}
 
-    display_frame_boxes = []
-    for raw_boxes in frame_boxes:
-        disp = {}
-        for raw_id, bbox in raw_boxes.items():
-            gid = id_map.get(raw_id, raw_id)
-            did = group_to_display.get(gid, raw_id)
-            disp[did] = bbox
-        display_frame_boxes.append(disp)
+        display_frame_boxes = []
+        for raw_boxes in frame_boxes:
+            disp = {}
+            for raw_id, bbox in raw_boxes.items():
+                gid = id_map.get(raw_id, raw_id)
+                did = group_to_display.get(gid, raw_id)
+                disp[did] = bbox
+            display_frame_boxes.append(disp)
 
+        with open(tracking_cache_path, "w") as f:
+            json.dump({
+                "src_fps":      src_fps,
+                "total_frames": total_frames,
+                "frame_w":      frame_w,
+                "frame_h":      frame_h,
+                "display_frame_boxes": [
+                    {str(k): list(v) for k, v in frame.items()}
+                    for frame in display_frame_boxes
+                ],
+            }, f)
+        print(f"  ✓ Tracking cache saved → {tracking_cache_path.name}")
+
+    # ── Step 3: VLM analysis ──────────────────────────────────────────────────
     print(f"\n[3/3] Running vision model (every {args.interval}s, backend={args.backend})...")
     backend = load_vision_backend(args.backend, args.vision_model)
 
     interval_frames = max(1, int(args.interval * src_fps))
-    sample_indices = list(range(0, len(frame_data), interval_frames))
+    sample_indices  = list(range(0, len(display_frame_boxes), interval_frames))
+
+    # Resume from existing progress if available
     entries = []
+    done_indices = set()
     prev_behaviors = {}
+    if progress_path.exists():
+        with open(progress_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    entry = json.loads(line)
+                    entries.append(entry)
+                    done_indices.add(entry["frame_idx"])
+        if entries:
+            last = entries[-1]
+            prev_behaviors = {
+                int(bid): bear["behavior"]
+                for bid, bear in last["bears"].items()
+                if bear.get("behavior")
+            }
+            print(f"  ✓ Resuming from {len(entries)} saved entries (last: t={last['timestamp_sec']:.1f}s)")
 
     stage_re = re.compile(r"\[([A-Z]+)\]")
 
@@ -331,55 +381,64 @@ def _run_analysis(args, video_path, json_path, frames_dir):
                 return True
         return False
 
-    cap_sample = cv2.VideoCapture(str(video_path))
-    for idx in tqdm(sample_indices, desc="  Analyzing"):
-        cap_sample.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame_bgr = cap_sample.read()
-        if not ret or frame_bgr is None:
-            continue
+    cap_sample   = cv2.VideoCapture(str(video_path))
+    progress_f   = open(progress_path, "a")
+    remaining    = [i for i in sample_indices if i not in done_indices]
+    try:
+        for idx in tqdm(remaining, desc="  Analyzing"):
+            cap_sample.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame_bgr = cap_sample.read()
+            if not ret or frame_bgr is None:
+                continue
 
-        bear_boxes = display_frame_boxes[idx]
-        timestamp_sec = idx / src_fps
+            bear_boxes    = display_frame_boxes[idx]
+            timestamp_sec = idx / src_fps
 
-        if bear_boxes:
-            annotated = annotate_frame(frame_bgr, bear_boxes)
-            if args.save_frames and frames_dir:
-                cv2.imwrite(str(frames_dir / f"frame_{idx:06d}_t{timestamp_sec:.1f}s.jpg"), annotated)
-            prompt = build_prompt(bear_boxes, frame_w, frame_h)
-            image_pil = Image.fromarray(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB))
-            raw_response = backend.analyze_frame(image_pil, prompt)
-            behaviors = parse_response(raw_response, bear_boxes)
-        else:
-            raw_response = "(no bears detected)"
-            behaviors = {}
+            if bear_boxes:
+                annotated = annotate_frame(frame_bgr, bear_boxes)
+                if args.save_frames and frames_dir:
+                    cv2.imwrite(str(frames_dir / f"frame_{idx:06d}_t{timestamp_sec:.1f}s.jpg"), annotated)
+                prompt       = build_prompt(bear_boxes, frame_w, frame_h)
+                image_pil    = Image.fromarray(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB))
+                raw_response = backend.analyze_frame(image_pil, prompt)
+                behaviors    = parse_response(raw_response, bear_boxes)
+            else:
+                raw_response = "(no bears detected)"
+                behaviors    = {}
 
-        changed = behaviors_changed(behaviors, prev_behaviors, args.dedupe_threshold)
-        if changed:
-            prev_behaviors = dict(behaviors)
-            status = "NEW"
-        else:
-            behaviors = dict(prev_behaviors)
-            status = "same"
+            changed = behaviors_changed(behaviors, prev_behaviors, args.dedupe_threshold)
+            if changed:
+                prev_behaviors = dict(behaviors)
+                status = "NEW"
+            else:
+                behaviors = dict(prev_behaviors)
+                status    = "same"
 
-        entry = {
-            "timestamp_sec": round(timestamp_sec, 3),
-            "frame_idx": idx,
-            "changed": changed,
-            "bears": {
-                str(bid): {
-                    "bbox": list(bear_boxes[bid][:4]),
-                    "conf": round(float(bear_boxes[bid][4]), 3),
-                    "position_hint": position_hint(*bear_boxes[bid][:4], frame_w, frame_h),
-                    "behavior": behaviors.get(bid, ""),
-                }
-                for bid in sorted(bear_boxes.keys())
-            },
-            "raw_response": raw_response,
-        }
-        entries.append(entry)
-        tqdm.write(f"  t={timestamp_sec:.1f}s  [{status}]  bears={list(bear_boxes.keys())}  behaviors={behaviors}")
+            entry = {
+                "timestamp_sec": round(timestamp_sec, 3),
+                "frame_idx":     idx,
+                "changed":       changed,
+                "bears": {
+                    str(bid): {
+                        "bbox":          list(bear_boxes[bid][:4]),
+                        "conf":          round(float(bear_boxes[bid][4]), 3),
+                        "position_hint": position_hint(*bear_boxes[bid][:4], frame_w, frame_h),
+                        "behavior":      behaviors.get(bid, ""),
+                    }
+                    for bid in sorted(bear_boxes.keys())
+                },
+                "raw_response": raw_response,
+            }
+            entries.append(entry)
+            progress_f.write(json.dumps(entry) + "\n")
+            progress_f.flush()
+            tqdm.write(f"  t={timestamp_sec:.1f}s  [{status}]  bears={list(bear_boxes.keys())}  behaviors={behaviors}")
+    finally:
+        cap_sample.release()
+        progress_f.close()
 
-    cap_sample.release()
+    # Sort entries by timestamp in case of out-of-order resume
+    entries.sort(key=lambda e: e["frame_idx"])
 
     print("\n[4/4] Generating whole-video summary...")
     torch.cuda.empty_cache()

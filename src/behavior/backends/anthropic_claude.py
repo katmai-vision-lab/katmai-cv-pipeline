@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import time
 from typing import Optional
 
 from PIL import Image
@@ -53,24 +54,34 @@ class AnthropicBackend(BaseBehaviorBackend):
         print(f"[backend anthropic] Using model {model}")
 
     def _chat(self, image_pil: Image.Image, prompt: str,
-              max_tokens: int = 400) -> str:
+              max_tokens: int = 400, retries: int = 5) -> str:
+        import anthropic
         b64, media_type = _pil_to_b64(image_pil)
-        resp = self.client.messages.create(
-            model=self.model,
-            max_tokens=max_tokens,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": b64,
-                    }},
-                    {"type": "text", "text": prompt},
-                ],
-            }],
-        )
-        return resp.content[0].text.strip()
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": b64,
+                }},
+                {"type": "text", "text": prompt},
+            ],
+        }]
+        for attempt in range(retries):
+            try:
+                resp = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    messages=messages,
+                )
+                return resp.content[0].text.strip()
+            except (anthropic.APIConnectionError, anthropic.APIStatusError) as e:
+                if attempt == retries - 1:
+                    raise
+                wait = 2 ** attempt
+                print(f"\n[anthropic] Transient error ({e.__class__.__name__}), retry {attempt+1}/{retries-1} in {wait}s...")
+                time.sleep(wait)
 
     def analyze_frame(self, image_pil: Image.Image, prompt: str) -> str:
         return self._chat(image_pil, prompt, max_tokens=300)
