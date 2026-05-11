@@ -488,6 +488,15 @@ class BearDetector:
             members[ry] |= members[rx]
             del members[rx]
 
+        # Pre-compute the set of pairs confirmed to be different individuals so
+        # the candidate loop below can skip them in O(1).
+        co_occurring = {
+            (min(a, b), max(a, b))
+            for i, a in enumerate(track_ids)
+            for b in track_ids[i + 1:]
+            if is_real_cooccurrence(a, b)
+        }
+
         # Evaluate candidate pairs in order of (temporal gap, spatial dist) so the
         # most confident merges happen first — this reduces bad transitive chains.
         candidates = []

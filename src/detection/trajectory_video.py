@@ -145,63 +145,64 @@ def render(traj_path, video_path, output_path, trail_frames, thickness,
     trails = {bid: deque(maxlen=trail_frames) for bid in bear_ids}
     last_seen = {bid: -10**9 for bid in bear_ids}
 
-    for f_idx in tqdm(range(total), desc="Rendering trails"):
-        ret, frame = cap.read()
-        if not ret:
-            break
+    try:
+        for f_idx in tqdm(range(total), desc="Rendering trails"):
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        # Push current-frame positions into each bear's trail deque.
-        # If this bear has been gone for > reset_gap_frames (camera zoom / cut),
-        # clear its old trail — old pixel coords won't match the new view.
-        seen_this_frame = set()
-        for det in per_frame.get(f_idx, []):
-            bid = det["bid"]
-            if f_idx - last_seen[bid] > reset_gap_frames:
-                trails[bid].clear()
-            trails[bid].append((int(round(det["cx"])), int(round(det["cy"]))))
-            last_seen[bid] = f_idx
-            seen_this_frame.add(bid)
+            # Push current-frame positions into each bear's trail deque.
+            # If this bear has been gone for > reset_gap_frames (camera zoom / cut),
+            # clear its old trail — old pixel coords won't match the new view.
+            seen_this_frame = set()
+            for det in per_frame.get(f_idx, []):
+                bid = det["bid"]
+                if f_idx - last_seen[bid] > reset_gap_frames:
+                    trails[bid].clear()
+                trails[bid].append((int(round(det["cx"])), int(round(det["cy"]))))
+                last_seen[bid] = f_idx
+                seen_this_frame.add(bid)
 
-        # Only draw trails for bears visible in the current frame.
-        for bid in bear_ids:
-            if bid in seen_this_frame:
-                draw_trail(frame, list(trails[bid]), bear_color(bid), thickness)
+            # Only draw trails for bears visible in the current frame.
+            for bid in bear_ids:
+                if bid in seen_this_frame:
+                    draw_trail(frame, list(trails[bid]), bear_color(bid), thickness)
 
-        # Draw current detection markers (dot, optional bbox + ID).
-        for det in per_frame.get(f_idx, []):
-            bid = det["bid"]
-            color = bear_color(bid)
-            cx, cy = int(round(det["cx"])), int(round(det["cy"]))
-            cv2.circle(frame, (cx, cy), max(thickness + 2, 5), color, -1, cv2.LINE_AA)
+            # Draw current detection markers (dot, optional bbox + ID).
+            for det in per_frame.get(f_idx, []):
+                bid = det["bid"]
+                color = bear_color(bid)
+                cx, cy = int(round(det["cx"])), int(round(det["cy"]))
+                cv2.circle(frame, (cx, cy), max(thickness + 2, 5), color, -1, cv2.LINE_AA)
 
-            if draw_box and det["w"] > 0 and det["h"] > 0:
-                x1 = int(round(cx - det["w"] / 2))
-                y1 = int(round(cy - det["h"] / 2))
-                x2 = int(round(cx + det["w"] / 2))
-                y2 = int(round(cy + det["h"] / 2))
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                if draw_box and det["w"] > 0 and det["h"] > 0:
+                    x1 = int(round(cx - det["w"] / 2))
+                    y1 = int(round(cy - det["h"] / 2))
+                    x2 = int(round(cx + det["w"] / 2))
+                    y2 = int(round(cy + det["h"] / 2))
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-            if draw_id:
-                label = f"Bear {bid}"
-                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
-                lx = cx + 8
-                ly = max(th + 4, cy - 8)
-                cv2.rectangle(frame, (lx - 2, ly - th - 4), (lx + tw + 4, ly + 4), color, -1)
-                cv2.putText(frame, label, (lx + 1, ly),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+                if draw_id:
+                    label = f"Bear {bid}"
+                    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
+                    lx = cx + 8
+                    ly = max(th + 4, cy - 8)
+                    cv2.rectangle(frame, (lx - 2, ly - th - 4), (lx + tw + 4, ly + 4), color, -1)
+                    cv2.putText(frame, label, (lx + 1, ly),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
 
-        draw_legend(frame, bear_ids)
+            draw_legend(frame, bear_ids)
 
-        # Frame counter (top-right)
-        ts = f"frame {f_idx}/{total - 1}"
-        (tw, th), _ = cv2.getTextSize(ts, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-        cv2.putText(frame, ts, (w - tw - 12, 24),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+            # Frame counter (top-right)
+            ts = f"frame {f_idx}/{total - 1}"
+            (tw, th), _ = cv2.getTextSize(ts, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+            cv2.putText(frame, ts, (w - tw - 12, 24),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
 
-        writer.write(frame)
-
-    cap.release()
-    writer.release()
+            writer.write(frame)
+    finally:
+        cap.release()
+        writer.release()
 
     # Try transcoding to MP4 with ffmpeg for portability; fall back to AVI.
     mp4_path = output_path.with_suffix(".mp4")

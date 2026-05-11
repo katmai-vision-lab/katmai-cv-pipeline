@@ -132,18 +132,13 @@ def parse_response(raw, bear_boxes):
     return behaviors
 
 
-def generate_summary(backend, entries, raw_frames, fps):
-    """Produce a narrative summary of feeding events across the whole video.
-
-    `backend` is any object satisfying the `BaseBehaviorBackend` interface
-    (Molmo2 / OpenAI / Anthropic / Gemini / custom).
-    """
+def generate_summary(backend, entries, video_path):
+    """Produce a narrative summary of feeding events across the whole video."""
     if not entries:
         return "No bears were detected in the video."
 
-    # Build a compact timeline of unique behavior states.
     timeline_lines = []
-    last_seen = {}  # bid -> behavior text
+    last_seen = {}
     for e in entries:
         t = e["timestamp_sec"]
         for bid_str, bear in e["bears"].items():
@@ -156,15 +151,14 @@ def generate_summary(backend, entries, raw_frames, fps):
 
     timeline_str = "\n".join(timeline_lines) if timeline_lines else "  (no behaviors recorded)"
 
-    # Pick a middle frame as visual context.
-    mid_idx = entries[len(entries) // 2]["frame_idx"]
-    ref_frame = raw_frames[mid_idx] if 0 <= mid_idx < len(raw_frames) else None
-    if ref_frame is None:
-        ref_frame = next((f for f in raw_frames if f is not None), None)
-
+    # Seek to a middle-of-video frame as visual context — read one frame, then release.
     image_pil = None
-    if ref_frame is not None:
-        # Downscale to keep summary inference within VRAM (helps Molmo2 specifically).
+    mid_idx = entries[len(entries) // 2]["frame_idx"]
+    cap = cv2.VideoCapture(str(video_path))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, mid_idx)
+    ret, ref_frame = cap.read()
+    cap.release()
+    if ret and ref_frame is not None:
         h, w = ref_frame.shape[:2]
         max_side = 512
         if max(h, w) > max_side:
@@ -271,13 +265,10 @@ def _run_analysis(args, video_path, json_path, frames_dir):
 
     frame_data = []
     frame_boxes = []
-    raw_frames = []
 
-    cap_full = cv2.VideoCapture(str(video_path))
+    # Do NOT store raw frames — 60fps × 1080p × 3 channels ≈ 6 MB/frame → OOM at scale.
+    # Frames are read on demand during the VLM sampling pass below.
     for result in tqdm(results_stream, total=total_frames, desc="  Tracking"):
-        ret, bgr = cap_full.read()
-        raw_frames.append(bgr if ret else None)
-
         track_ids, track_positions, box_data = [], {}, {}
         if result.boxes.id is not None:
             track_ids = result.boxes.id.cpu().numpy().astype(int).tolist()
@@ -297,7 +288,6 @@ def _run_analysis(args, video_path, json_path, frames_dir):
             "track_positions": track_positions,
         })
         frame_boxes.append(box_data)
-    cap_full.release()
 
     print("\n[2/3] Merging fragmented tracks...")
     _, id_map = detector._merge_fragmented_tracks(frame_data)
@@ -317,7 +307,7 @@ def _run_analysis(args, video_path, json_path, frames_dir):
     backend = load_vision_backend(args.backend, args.vision_model)
 
     interval_frames = max(1, int(args.interval * src_fps))
-    sample_indices = list(range(0, len(raw_frames), interval_frames))
+    sample_indices = list(range(0, len(frame_data), interval_frames))
     entries = []
     prev_behaviors = {}
 
@@ -341,9 +331,11 @@ def _run_analysis(args, video_path, json_path, frames_dir):
                 return True
         return False
 
+    cap_sample = cv2.VideoCapture(str(video_path))
     for idx in tqdm(sample_indices, desc="  Analyzing"):
-        frame_bgr = raw_frames[idx]
-        if frame_bgr is None:
+        cap_sample.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ret, frame_bgr = cap_sample.read()
+        if not ret or frame_bgr is None:
             continue
 
         bear_boxes = display_frame_boxes[idx]
@@ -387,9 +379,11 @@ def _run_analysis(args, video_path, json_path, frames_dir):
         entries.append(entry)
         tqdm.write(f"  t={timestamp_sec:.1f}s  [{status}]  bears={list(bear_boxes.keys())}  behaviors={behaviors}")
 
+    cap_sample.release()
+
     print("\n[4/4] Generating whole-video summary...")
     torch.cuda.empty_cache()
-    summary = generate_summary(backend, entries, raw_frames, src_fps)
+    summary = generate_summary(backend, entries, video_path)
     print(f"\nSummary:\n{summary}\n")
 
     output_data = {
