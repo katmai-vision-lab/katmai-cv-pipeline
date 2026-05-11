@@ -599,30 +599,31 @@ def main():
     prev_center: dict[int, tuple[float, float]] = {}
     per_frame_results: list[dict] = []
 
-    for frame_idx, t_sec, bgr, bears in iterator:
-        bears_out = {}
-        for bid, bbox in bears.items():
-            sig = score_frame(
-                bgr, bbox, prev_center.get(bid),
-                face_detector=face_detector,
-                cap_dense=cap_dense,
-                frame_idx=frame_idx,
-                src_fps=src_fps,
-                chew_window_sec=args.chew_window_sec,
-                chew_band=(args.chew_band_low, args.chew_band_high),
-            )
-            bears_out[bid] = {**asdict(sig), "bbox": list(bbox)}
-            x1, y1, x2, y2 = bbox
-            prev_center[bid] = ((x1 + x2) / 2, (y1 + y2) / 2)
-        per_frame_results.append({
-            "frame_idx": frame_idx,
-            "timestamp_sec": round(t_sec, 3),
-            "bears": bears_out,
-        })
-
-    cap.release()
-    if cap_dense is not None:
-        cap_dense.release()
+    try:
+        for frame_idx, t_sec, bgr, bears in iterator:
+            bears_out = {}
+            for bid, bbox in bears.items():
+                sig = score_frame(
+                    bgr, bbox, prev_center.get(bid),
+                    face_detector=face_detector,
+                    cap_dense=cap_dense,
+                    frame_idx=frame_idx,
+                    src_fps=src_fps,
+                    chew_window_sec=args.chew_window_sec,
+                    chew_band=(args.chew_band_low, args.chew_band_high),
+                )
+                bears_out[bid] = {**asdict(sig), "bbox": list(bbox)}
+                x1, y1, x2, y2 = bbox
+                prev_center[bid] = ((x1 + x2) / 2, (y1 + y2) / 2)
+            per_frame_results.append({
+                "frame_idx": frame_idx,
+                "timestamp_sec": round(t_sec, 3),
+                "bears": bears_out,
+            })
+    finally:
+        cap.release()
+        if cap_dense is not None:
+            cap_dense.release()
 
     per_frame_results = smooth_scores(per_frame_results, window=args.smooth_window)
 
