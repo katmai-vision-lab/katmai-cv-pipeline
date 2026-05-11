@@ -156,7 +156,7 @@ def _menu() -> str:
     t.add_row("2", "Count bears",          "per-video bear counts · optional unique-bear tracking")
     t.add_row("3", "Detect feeding events","VLM frame analysis · timestamped behavior JSON")
     t.add_row("4", "Count salmon jumps",   "CV-based jump detection · jump count + timestamps")
-    t.add_row("5", "Fetch weather data",   "RAWS stations · wind · temperature · precipitation")
+    t.add_row("5", "Fetch environmental data", "RAWS · NADP · USGS · weather, precipitation, hydrology")
     t.add_row("6", "Evaluate model",       "mAP · precision · recall · counting accuracy vs ground truth")
     t.add_row("7", "Train model",          "fine-tune YOLOv8n on a new labeled dataset")
     t.add_row("q", "Quit", "")
@@ -406,75 +406,131 @@ def count_salmon_jumps():
         _err(str(e))
 
 
-# ── 5. Fetch weather data ─────────────────────────────────────────────────────
+# ── 5. Fetch environmental data ───────────────────────────────────────────────
 
-def fetch_weather():
-    c.print(); _header("Fetch Weather Data",
-                       "NPS RAWS stations  ·  wind · temperature · humidity · precipitation")
+def fetch_environmental_data():
+    c.print(); _header("Fetch Environmental Data",
+                       "RAWS weather  ·  NADP precipitation  ·  USGS hydrology  ·  all fetched together")
 
-    from src.environment.raws_weather import STATIONS
-    import json as _json
+    t = Table(box=box.SIMPLE, show_header=True, padding=(0, 1))
+    t.add_column("Source", style="bold cyan",  width=6)
+    t.add_column("Station / Site",  style="white",    min_width=34)
+    t.add_column("Variables",       style="dim")
+    t.add_row("RAWS", "ATHF Three Forks · ACOV Coville · APFA Pfaff Mine",
+              "hourly wind, temp, humidity, precip")
+    t.add_row("NADP", "AK97 Southwest Alaska",
+              "daily precipitation (inches)")
+    t.add_row("USGS", "Kvichak River at Igiugig (~106 km from Brooks Falls)",
+              "15-min water level, stream flow, water temp")
+    c.print(); c.print(t)
 
-    c.print("\n  [dim]Available stations:[/dim]")
-    t = Table(box=None, show_header=False, padding=(0, 1))
-    t.add_column(style="bold cyan", width=6)
-    t.add_column(style="white", min_width=16)
-    t.add_column(style="dim")
-    station_keys = list(STATIONS)
-    for i, (sid, info) in enumerate(STATIONS.items(), 1):
-        t.add_row(str(i), info["name"], f"{info['dist_km']} km · {sid}")
-    t.add_row("a", "All stations", "fetch ATHF + ACOV + APFA")
-    c.print(t); c.print()
-
-    valid = "".join(str(i) for i in range(1, len(station_keys) + 1)) + "a"
-    c.print(f"  [cyan]Station[/cyan]  [dim]({'/'.join(valid)})[/dim] : ", end="")
-    while True:
-        ch = _getch().lower()
-        if ch in valid:
-            c.print(ch)
-            break
-
-    selected = None if ch == "a" else [station_keys[int(ch) - 1]]
-    station_label = "all stations" if ch == "a" else STATIONS[station_keys[int(ch)-1]]["name"]
-
-    date_str = _ask("Date", "2023-07-15", "YYYY-MM-DD  (bear season: Jul–Sep)")
-    fmt      = _key("Output format", "jc", "j")  # j=json, c=csv
-    fmt_name = "json" if fmt == "j" else "csv"
+    from datetime import date as _date
+    date_str = _ask("Date", _date.today().isoformat(), "YYYY-MM-DD  (bear season: Jul–Sep)")
+    fmt_name = "json" if _key("Output format", "jc", "j") == "j" else "csv"
 
     c.print()
-    _config({"station": station_label, "date": date_str, "format": fmt_name})
-
-    if not _confirm("Fetch?"):
+    _config({"date": date_str, "format": fmt_name, "sources": "RAWS + NADP + USGS"})
+    if not _confirm("Fetch all three sources?"):
         return
 
-    _step("Fetching from RAWS…")
     try:
         from datetime import datetime as _dt
         d = _dt.strptime(date_str, "%Y-%m-%d")
-        from src.environment.raws_weather import fetch_day, save_json, save_csv
-        data = fetch_day(d.year, d.month, d.day, station_ids=selected)
-
-        out_dir = PREDICTIONS_DIR / "raws_weather"
-        sid_label = "all-stations" if ch == "a" else station_keys[int(ch) - 1]
-        out_path  = out_dir / f"{date_str}_{sid_label}.{fmt_name}"
-
-        if fmt_name == "csv":
-            save_csv(data, out_path)
-        else:
-            save_json(data, out_path)
-
-        total = sum(len(v) for v in data["stations"].values())
-        _ok(f"Saved {total} hourly rows → {out_path}")
-
-        if data["errors"]:
-            for sid, msg in data["errors"].items():
-                _err(f"{sid}: {msg}")
     except ValueError:
-        _err(f"Invalid date format: '{date_str}'. Use YYYY-MM-DD.")
+        return _err(f"Invalid date '{date_str}'. Use YYYY-MM-DD.")
+
+    rows = []  # (source, station_label, n_records, out_path_str, error_str)
+
+    # ── RAWS (all three stations) ─────────────────────────────────────────────
+    _step("RAWS — fetching wind / temperature / humidity…")
+    try:
+        from src.environment.raws_weather import (
+            fetch_day as _raws_fetch, save_json as _raws_json, save_csv as _raws_csv,
+        )
+        raws = _raws_fetch(d.year, d.month, d.day, station_ids=None)
+        out  = PREDICTIONS_DIR / "raws_weather" / f"{date_str}_all-stations.{fmt_name}"
+        (_raws_csv if fmt_name == "csv" else _raws_json)(raws, out)
+        n     = sum(len(v) for v in raws["stations"].values())
+        errs  = raws.get("errors", {})
+        note  = f"{len(errs)} station(s) offline" if errs else ""
+        rows.append(("RAWS", "ATHF / ACOV / APFA", n, str(out), note))
     except KeyboardInterrupt:
-        c.print("\n  [yellow]Cancelled.[/yellow]")
+        raise
     except Exception as e:
-        _err(str(e))
+        rows.append(("RAWS", "ATHF / ACOV / APFA", 0, "", str(e)))
+
+    # ── NADP precipitation ────────────────────────────────────────────────────
+    _step("NADP — fetching daily precipitation…")
+    try:
+        from src.environment.nadp_precip import (
+            fetch_day as _nadp_fetch, save_json as _nadp_json, save_csv as _nadp_csv,
+        )
+        nadp = _nadp_fetch(d.year, d.month, d.day, site_ids=["AK97"])
+        out  = PREDICTIONS_DIR / "nadp_precip" / f"{date_str}_AK97.{fmt_name}"
+        (_nadp_csv if fmt_name == "csv" else _nadp_json)(nadp, out)
+        n    = sum(len(v) for v in nadp["sites"].values())
+        errs = nadp.get("errors", {})
+        note = "; ".join(errs.values()) if errs else ""
+        rows.append(("NADP", "AK97", n, str(out), note))
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        rows.append(("NADP", "AK97", 0, "", str(e)))
+
+    # ── USGS hydrology ────────────────────────────────────────────────────────
+    _step("USGS — fetching water level / stream flow / water temp…")
+    try:
+        from src.environment.usgs_hydro import (
+            fetch_day as _usgs_fetch, save_json as _usgs_json, save_csv as _usgs_csv,
+        )
+        usgs = _usgs_fetch(date_str)
+        out  = PREDICTIONS_DIR / "usgs_hydro" / f"{date_str}.{fmt_name}"
+        (_usgs_csv if fmt_name == "csv" else _usgs_json)(usgs, out)
+        n    = len(usgs.get("readings", []))
+        errs = usgs.get("errors", [])
+        note = "; ".join(errs) if errs else ""
+        rows.append(("USGS", "Kvichak River (15300500)", n, str(out), note))
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        rows.append(("USGS", "Kvichak River (15300500)", 0, "", str(e)))
+
+    # ── Results summary ───────────────────────────────────────────────────────
+    c.print()
+    t = Table(title="Environmental Data Results", box=box.ROUNDED, border_style="cyan")
+    t.add_column("Source",         style="bold cyan", width=6)
+    t.add_column("Station / Site", style="white",     min_width=26)
+    t.add_column("Records",        style="bold green", justify="right", width=8)
+    t.add_column("Saved to",       style="dim",        max_width=46, no_wrap=True, overflow="ellipsis")
+    t.add_column("",               width=3,            justify="center")
+
+    all_ok = True
+    for source, label, n, path, err in rows:
+        if err and n == 0:
+            status  = "[red]✗[/red]"
+            rec_str = "[dim]—[/dim]"
+            path_str = f"[red]{err[:44]}[/red]"
+            all_ok = False
+        elif err:
+            status   = "[yellow]⚠[/yellow]"
+            rec_str  = str(n)
+            path_str = Path(path).name
+        else:
+            status   = "[green]✓[/green]"
+            rec_str  = str(n)
+            path_str = Path(path).name
+        t.add_row(source, label, rec_str, path_str, status)
+
+    c.print(t)
+
+    for source, _, n, _, err in rows:
+        if err and n > 0:
+            c.print(f"  [yellow]⚠[/yellow]  {source}: {err}")
+
+    if all_ok:
+        _ok(f"All sources fetched → {PREDICTIONS_DIR}")
+    else:
+        c.print(f"\n  [yellow]Some sources failed — check errors above.[/yellow]")
 
 
 # ── 6. Evaluate ───────────────────────────────────────────────────────────────
@@ -602,7 +658,7 @@ def main():
         "2": count_bears,
         "3": detect_feeding,
         "4": count_salmon_jumps,
-        "5": fetch_weather,
+        "5": fetch_environmental_data,
         "6": evaluate,
         "7": train,
     }
