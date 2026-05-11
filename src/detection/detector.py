@@ -352,6 +352,8 @@ class BearDetector:
 
     @staticmethod
     def _merge_fragmented_tracks(frame_data, max_gap_frames=3600, max_dist_px=150,
+                                  cooccurrence_tolerance_frames=60,
+                                  cooccurrence_artifact_iou=0.3,
                                   decisions=None):
         """
         Post-process track IDs to merge fragments from the same bear.
@@ -783,6 +785,8 @@ class BearDetector:
         merge_decisions = []
         _, id_map_pre_filter = self._merge_fragmented_tracks(
             frame_data, max_gap_frames=max_gap_frames, max_dist_px=max_dist_px,
+            cooccurrence_tolerance_frames=cooccurrence_tolerance_frames,
+            cooccurrence_artifact_iou=cooccurrence_artifact_iou,
             decisions=merge_decisions,
         )
         # --- Filter spurious (short or low-confidence) groups ---
