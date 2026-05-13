@@ -383,9 +383,8 @@ def main():
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
-        choices=["cuda", "cpu"],
-        help="Device to run models on (default: cuda)"
+        default=None,
+        help="Device to run models on: cuda / mps / cpu (default: auto-detect)"
     )
     parser.add_argument(
         "--use-gdino",
@@ -419,16 +418,21 @@ def main():
     )
     
     args = parser.parse_args()
-    
+
+    # Auto-detect device when not explicitly passed
+    if args.device is None:
+        from src.config import get_device
+        args.device = get_device()
+
     # Validate paths
     if not args.images.exists():
         print(f"Error: Images directory not found: {args.images}")
         sys.exit(1)
-    
+
     if not args.labels.exists():
         print(f"Error: Labels directory not found: {args.labels}")
         sys.exit(1)
-    
+
     # Train calibration
     train_calibration(
         images_dir=args.images,

@@ -113,7 +113,8 @@ class PoseSwinIdentifier:
         cfg.freeze()
 
         if device is None:
-            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            from src.config import get_device
+            device = get_device()
         self.device = torch.device(device)
 
         self.model = build_swin_reid(

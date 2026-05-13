@@ -432,8 +432,8 @@ def _run_analysis(args, video_path, json_path, frames_dir):
     entries.sort(key=lambda e: e["frame_idx"])
 
     print("\n[4/4] Generating whole-video summary...")
-    torch.cuda.empty_cache()
-    summary = generate_summary(backend, entries, video_path)
+    if torch.cuda.is_available(): torch.cuda.empty_cache()
+    summary = generate_summary(backend, entries, raw_frames, src_fps)
     print(f"\nSummary:\n{summary}\n")
 
     salmon_counts = count_salmon_catches(entries)

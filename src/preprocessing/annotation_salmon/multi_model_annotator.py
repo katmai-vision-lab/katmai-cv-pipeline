@@ -183,7 +183,7 @@ class MultiModelAnnotator:
             )
             self.thresholds['gdino'] = gdino_threshold
             print("   Clearing GPU cache...")
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
             gc.collect()
 
         if use_owlvit:
@@ -197,7 +197,7 @@ class MultiModelAnnotator:
             )
             self.thresholds['owlvit'] = owlvit_threshold
             print("   Clearing GPU cache...")
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
             gc.collect()
 
         if use_florence2:
@@ -211,7 +211,7 @@ class MultiModelAnnotator:
             )
             self.thresholds['florence2'] = florence2_threshold
             print("   Clearing GPU cache...")
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
             gc.collect()
 
         if use_detr:
@@ -223,7 +223,7 @@ class MultiModelAnnotator:
             )
             self.thresholds['detr'] = detr_threshold
             print("   Clearing GPU cache...")
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
             gc.collect()
 
         if use_megadet:
@@ -235,7 +235,7 @@ class MultiModelAnnotator:
             )
             self.thresholds['megadet'] = megadet_threshold
             print("   Clearing GPU cache...")
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
             gc.collect()
 
         print("\n" + "="*80)
@@ -322,7 +322,7 @@ class MultiModelAnnotator:
             results[model_name] = detections
 
             # Clear cache after each model
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
 
         return results
 
