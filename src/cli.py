@@ -7,8 +7,11 @@ import glob
 import json
 import readline
 import sys
-import termios
-import tty
+import os
+import platform
+if platform.system() != "Windows":
+    import termios
+    import tty
 from pathlib import Path
 from typing import Optional
 
@@ -43,17 +46,32 @@ c = Console()
 # ── Raw single-keypress ───────────────────────────────────────────────────────
 
 def _getch() -> str:
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        ch = sys.stdin.read(1)
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-    if ch == "\x03":
-        raise KeyboardInterrupt
-    return ch
-
+    if os.name == "nt":
+        import msvcrt
+        while True:
+            ch = msvcrt.getch()
+            # Swallow the second byte of special keys (arrows, F-keys, etc.)
+            if ch in (b'\x00', b'\xe0'):
+                msvcrt.getch()
+                continue
+            ch = ch.decode("utf-8", errors="ignore")
+            if ch == "\x03":
+                raise KeyboardInterrupt
+            return ch
+    else:
+        import termios
+        import tty
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        if ch == "\x03":
+            raise KeyboardInterrupt
+        return ch
+    
 def _key(prompt: str, valid: str, default: str = "") -> str:
     """Print prompt then wait for a single valid keypress (no Enter needed)."""
     opts = "/".join(
@@ -426,7 +444,13 @@ def fetch_environmental_data():
 
     from datetime import date as _date
     date_str = _ask("Date", _date.today().isoformat(), "YYYY-MM-DD  (bear season: Jul–Sep)")
-    fmt_name = "json" if _key("Output format", "jc", "j") == "j" else "csv"
+    c.print("  [cyan]Output format[/cyan]  [dim](json/csv)[/dim] : ", end="")
+    while True:
+        ch = _getch().lower()
+        if ch in "jc\r\n":
+            fmt_name = "csv" if ch == "c" else "json"
+            c.print(fmt_name)
+            break
 
     c.print()
     _config({"date": date_str, "format": fmt_name, "sources": "RAWS + NADP + USGS"})
