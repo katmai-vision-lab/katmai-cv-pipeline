@@ -144,7 +144,8 @@ class BearFaceDetector:
     def __init__(self, device: Optional[str] = None,
                  score_threshold: float = 0.5):
         if device is None:
-            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            from src.config import get_device
+            device = get_device()
         self.device = torch.device(device)
         self.score_threshold = score_threshold
 

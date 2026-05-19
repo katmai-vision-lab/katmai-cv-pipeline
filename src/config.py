@@ -30,3 +30,39 @@ TRACKERS_CONFIG_DIR = PROJECT_ROOT / 'configs' / 'trackers'
 # Default YOLO classes
 COCO_BEAR_CLASS = 21
 FINETUNED_BEAR_CLASS = 0  # Class ID in the fine-tuned bear_detector3 model
+
+
+# ---------------------------------------------------------------------------
+# Cross-platform device helpers
+# ---------------------------------------------------------------------------
+def get_device(prefer: str | None = None) -> str:
+    """Return the best available torch device string.
+
+    Resolution order (when `prefer` is None):
+      1. CUDA (NVIDIA on Linux/Windows, or container with --gpus all)
+      2. MPS  (Apple Silicon: M1/M2/M3/M4)
+      3. CPU  (fallback everywhere)
+
+    If `prefer` is given ("cuda" / "mps" / "cpu") it is honored when
+    available; otherwise the helper falls back to the next option.
+    """
+    import torch  # local import so config.py stays lightweight
+
+    if prefer == "cpu":
+        return "cpu"
+    if prefer in (None, "cuda") and torch.cuda.is_available():
+        return "cuda"
+    if prefer in (None, "mps") and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def cuda_empty_cache() -> None:
+    """torch.cuda.empty_cache() that's a no-op outside CUDA.
+
+    Some PyTorch versions raise on Mac/MPS when empty_cache is called
+    unconditionally; this guard keeps cross-platform code safe.
+    """
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()

@@ -144,7 +144,7 @@ class MultiModelAnnotator:
                 device=device
             )
             self.thresholds['gdino'] = gdino_threshold
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
             gc.collect()
 
         if use_detr:
@@ -154,7 +154,7 @@ class MultiModelAnnotator:
                 device=device
             )
             self.thresholds['detr'] = detr_threshold
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
             gc.collect()
 
         if use_megadet:
@@ -164,7 +164,7 @@ class MultiModelAnnotator:
                 version="v5",
             )
             self.thresholds['megadet'] = megadet_threshold
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
             gc.collect()
 
         print("\n" + "="*60)
@@ -224,7 +224,7 @@ class MultiModelAnnotator:
             results[model_name] = detections
 
             # Clear cache after each model
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
 
         return results
 

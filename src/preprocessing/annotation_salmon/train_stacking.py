@@ -393,12 +393,16 @@ def main():
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
-        help="Device to run models on"
+        default=None,
+        help="Device to run models on: cuda / mps / cpu (default: auto-detect)"
     )
     
     args = parser.parse_args()
-    
+
+    if args.device is None:
+        from src.config import get_device
+        args.device = get_device()
+
     train_stacking_meta_learner(
         images_dir=Path(args.images),
         labels_dir=Path(args.labels),

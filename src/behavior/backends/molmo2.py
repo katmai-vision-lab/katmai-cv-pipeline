@@ -76,4 +76,4 @@ class Molmo2Backend(BaseBehaviorBackend):
 
     def close(self) -> None:
         del self.model, self.processor
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available(): torch.cuda.empty_cache()
