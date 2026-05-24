@@ -368,24 +368,18 @@ def count_salmon_jumps():
     video = _pick_video()
     if not video: return _err("No video selected.")
 
-    # ── Detect headless environment ──────────────────────
     import os as _os
     has_display = bool(_os.environ.get("DISPLAY") or _os.environ.get("WAYLAND_DISPLAY"))
 
-    if not has_display:
-        c.print("\n  [yellow]⚠  No display detected (headless server).[/yellow]")
-        c.print("  [dim]Interactive ROI/trackbar mode is unavailable. "
-                "Use fixed params mode and pass --roi and --line-y directly.[/dim]")
+    c.print("\n  [dim]Interactive mode opens OpenCV GUI windows for ROI draw and live tuning.[/dim]")
+    c.print("  [dim]Fixed params mode runs headless — useful after you know your values.[/dim]\n")
 
-    c.print("\n  [dim]Run interactively first to find good values, "
-            "then re-run with fixed params.[/dim]")
-
-    # Force non-interactive if headless
     if has_display:
         interactive = _confirm("Run in interactive mode (ROI selector + trackbars)?", default=True)
     else:
         interactive = False
-        c.print("  [dim]Skipping interactive mode (no display).[/dim]")
+        c.print("  [yellow]⚠  No display detected — interactive mode unavailable.[/yellow]")
+        c.print("  [dim]Using fixed params mode.[/dim]\n")
 
     roi      = None
     line_y   = None
@@ -400,8 +394,8 @@ def count_salmon_jumps():
         roi_str  = _ask("ROI", "", "x1,y1,x2,y2  e.g. 434,720,710,1062  (blank = full frame)")
         roi      = roi_str.strip() or None
         line_y   = _ask("Tripwire Y", "", "pixel row of the counting line")
-        var_thr  = int(_ask("varThreshold", "80",  "MOG2 sensitivity — raise to suppress water noise"))
-        min_area = int(_ask("Min area",     "800", "min contour size in pixels"))
+        var_thr  = int(_ask("varThreshold", "40",  "MOG2 sensitivity — raise to suppress water noise"))
+        min_area = int(_ask("Min area",     "300", "min contour size in pixels"))
         blur     = int(_ask("Blur size",    "7",   "Gaussian kernel size, odd number"))
         history  = int(_ask("History",      "300", "frames used to build the background model"))
         skip     = int(_ask("Frame skip",   "2",   "process every Nth frame"))
@@ -414,10 +408,9 @@ def count_salmon_jumps():
     c.print()
     _config({
         "video":        Path(video).name,
-        "mode":         "interactive" if interactive else "fixed params",
-        "display":      "yes" if has_display else "headless",
-        "roi":          roi or ("(interactive draw)" if interactive else "(full frame)"),
-        "line_y":       line_y or ("(interactive click)" if interactive else "(auto 60%)"),
+        "mode":         "interactive (GUI)" if interactive else "fixed params (headless)",
+        "roi":          roi or ("(draw with mouse)" if interactive else "(full frame)"),
+        "line_y":       line_y or ("(click to place)" if interactive else "(auto 60%)"),
         "varThreshold": var_thr,
         "min_area":     min_area,
         "blur_size":    blur,
@@ -429,59 +422,68 @@ def count_salmon_jumps():
 
     (PREDICTIONS_DIR / "salmon_jumps").mkdir(parents=True, exist_ok=True)
 
-    _step("Launching salmon jump counter…")
-    if interactive and has_display:
-        c.print("  [dim]GUI windows will open. Press Q inside the video window to stop.[/dim]")
-    elif not has_display:
-        c.print("  [dim]Running headless — progress printed to terminal.[/dim]")
+    # ── Build the CLI command ─────────────────────────────
+    script = str(PROJECT_ROOT / "src" / "behavior" / "count_salmon_jumps.py")
+    cmd = [sys.executable, script, "--video", video]
+
+    if not interactive:
+        # Fixed params — pass everything, suppress GUI
+        if roi:      cmd += ["--roi",           roi]
+        if line_y:   cmd += ["--line-y",        line_y]
+        cmd += ["--var-threshold", str(var_thr)]
+        cmd += ["--min-area",      str(min_area)]
+        cmd += ["--blur-size",     str(blur)]
+        cmd += ["--history",       str(history)]
+        cmd += ["--skip-frames",   str(skip)]
+        cmd += ["--no-display"]          # headless — no cv2 windows at all
+        cmd += ["--no-trackbars"]
+    # Interactive: no extra flags — script opens ROI selector + trackbars itself
+
+    if output:
+        cmd += ["--output", output]
+
+    _step("Running salmon jump counter…")
+    if interactive:
+        c.print("  [dim]OpenCV windows will open. Draw ROI → press ENTER, "
+                "click tripwire → press ENTER, then press Q to finish.[/dim]\n")
+    else:
+        c.print("  [dim]Running headless — progress printed below.[/dim]\n")
+
+    # Print the exact command so user can copy-paste it later
+    c.print("  [dim]Command:[/dim]")
+    c.print(f"  [dim]{' '.join(cmd)}[/dim]\n")
 
     try:
-        from src.detection.salmons.salmon_jump_counter_bg import run as _run
+        import subprocess as _sp
+        result = _sp.run(cmd, check=False)
 
-        line_y_int = int(line_y) if line_y else None
-        roi_tuple  = tuple(int(v) for v in roi.split(",")) if roi else None
+        if result.returncode != 0:
+            _err(f"Script exited with code {result.returncode}")
+        else:
+            if output:
+                _ok(f"Annotated video saved → {output}")
+            else:
+                _ok("Done.")
 
-        jump_count = _run(
-            video_path    = video,
-            line_y        = line_y_int,
-            min_area      = min_area,
-            roi_fixed     = roi_tuple,
-            var_threshold = var_thr,
-            history       = history,
-            blur_size     = blur,
-            skip_frames   = skip,
-            output_path   = output,
-            display       = has_display,
-            debug_area    = False,
-            use_trackbars = interactive and has_display,
-        )
-
-        t = Table(box=box.ROUNDED, border_style="cyan")
-        t.add_column("Metric", style="cyan")
-        t.add_column("Value",  style="bold green", justify="right")
-        t.add_row("Jump count", str(jump_count))
-        c.print(); c.print(t)
-
-        if output:
-            _ok(f"Annotated video saved → {output}")
-
-        # Always print re-run hint so user can refine params next time
-        c.print(f"\n  [dim]Re-run directly:[/dim]")
-        hint = f'python src/detection/salmons/salmon_jump_counter_bg.py \\\n    --video "{video}"'
-        if roi:    hint += f" \\\n    --roi {roi}"
-        if line_y: hint += f" \\\n    --line-y {line_y}"
-        hint += (f" \\\n    --var-threshold {var_thr}"
-                 f" --min-area {min_area}"
-                 f" --blur-size {blur}"
-                 f" --skip-frames {skip}")
-        if output: hint += f' \\\n    --output "{output}"'
-        c.print(f"  [dim]{hint}[/dim]")
+        # Re-run hint with the values used (or discovered interactively)
+        c.print(f"\n  [dim]Re-run with fixed params:[/dim]")
+        hint_parts = [
+            f'python {script}',
+            f'  --video "{video}"',
+        ]
+        if roi:    hint_parts.append(f"  --roi {roi}")
+        if line_y: hint_parts.append(f"  --line-y {line_y}")
+        hint_parts += [
+            f"  --var-threshold {var_thr}",
+            f"  --min-area {min_area}",
+        ]
+        if output: hint_parts.append(f'  --output "{output}"')
+        c.print("  [dim]" + " \\\n".join(hint_parts) + "[/dim]")
 
     except KeyboardInterrupt:
         c.print("\n  [yellow]Cancelled.[/yellow]")
     except Exception as e:
         _err(str(e))
-
 # ── 5. Fetch environmental data ───────────────────────────────────────────────
 
 def fetch_environmental_data():

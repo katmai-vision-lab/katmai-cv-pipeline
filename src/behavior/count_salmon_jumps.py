@@ -465,7 +465,9 @@ def run(
     cap.release()
     if writer:
         writer.release()
-    cv2.destroyAllWindows()
+    if display:                      # ← guard added
+        cv2.destroyAllWindows()
+
 
     # ── Summary ───────────────────────────────────────────
     print("\n" + "═" * 48)
