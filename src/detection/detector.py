@@ -352,6 +352,8 @@ class BearDetector:
 
     @staticmethod
     def _merge_fragmented_tracks(frame_data, max_gap_frames=3600, max_dist_px=150,
+                                  cooccurrence_tolerance_frames=60,
+                                  cooccurrence_artifact_iou=0.3,
                                   decisions=None):
         """
         Post-process track IDs to merge fragments from the same bear.
@@ -487,6 +489,15 @@ class BearDetector:
             parent[rx] = ry
             members[ry] |= members[rx]
             del members[rx]
+
+        # Pre-compute the set of pairs confirmed to be different individuals so
+        # the candidate loop below can skip them in O(1).
+        co_occurring = {
+            (min(a, b), max(a, b))
+            for i, a in enumerate(track_ids)
+            for b in track_ids[i + 1:]
+            if is_real_cooccurrence(a, b)
+        }
 
         # Evaluate candidate pairs in order of (temporal gap, spatial dist) so the
         # most confident merges happen first — this reduces bad transitive chains.
@@ -638,6 +649,129 @@ class BearDetector:
         kept = {tid: root for tid, root in id_map.items() if root not in dropped}
         return kept, dropped
 
+
+    @staticmethod
+    def canonical_tracking_cache(video_path):
+        """Stable cache path for a video: predictions/<stem>/tracking_cache.json."""
+        return Path(PREDICTIONS_DIR) / Path(video_path).stem / "tracking_cache.json"
+
+    def compute_display_boxes(self, video_path, conf=0.25, iou=0.7,
+                              classes=None, tracker=None, show_progress=False,
+                              cache_path=None):
+        """
+        Run ByteTrack + merge + filter on a video.
+
+        Returns list[dict[int, tuple]]: one dict per frame mapping
+        display_id -> (x1, y1, x2, y2, conf).  Display IDs start at 1,
+        ordered by first appearance, with spurious tracks removed.
+        """
+        if cache_path is not None:
+            cache_path = Path(cache_path)
+            if cache_path.exists():
+                with open(cache_path) as _f:
+                    _c = json.load(_f)
+                print(f"   Loaded tracking cache: {cache_path}")
+                return [
+                    {int(k): tuple(v) for k, v in frame.items()}
+                    for frame in _c["display_frame_boxes"]
+                ]
+
+        if classes is None:
+            classes = [0]
+        if tracker is None:
+            tracker = str(TRACKERS_CONFIG_DIR / "bytetrack.yaml")
+
+        total = None
+        if show_progress:
+            cap = cv2.VideoCapture(str(video_path))
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap.release()
+
+        results_stream = self.model.track(
+            source=str(video_path),
+            conf=conf,
+            iou=iou,
+            classes=classes,
+            tracker=tracker,
+            save=False,
+            stream=True,
+            verbose=False,
+            persist=True,
+        )
+
+        if show_progress:
+            from tqdm import tqdm
+            results_stream = tqdm(results_stream, total=total, desc="  Tracking")
+
+        frame_data, frame_boxes = [], []
+        for result in results_stream:
+            track_ids, positions, boxes = [], {}, {}
+            if result.boxes.id is not None:
+                tids  = result.boxes.id.cpu().numpy().astype(int).tolist()
+                xyxy  = result.boxes.xyxy.cpu().numpy()
+                xywh  = result.boxes.xywh.cpu().numpy()
+                confs = result.boxes.conf.cpu().numpy()
+                for i, tid in enumerate(tids):
+                    positions[tid] = (float(xywh[i][0]), float(xywh[i][1]))
+                    boxes[tid] = (
+                        int(xyxy[i][0]), int(xyxy[i][1]),
+                        int(xyxy[i][2]), int(xyxy[i][3]),
+                        float(confs[i]),
+                    )
+                track_ids = tids
+            frame_data.append({"frame": len(frame_data), "track_ids": track_ids,
+                               "track_positions": positions})
+            frame_boxes.append(boxes)
+
+        _, id_map_pre = self._merge_fragmented_tracks(frame_data)
+        id_map, dropped = self._filter_spurious_groups(frame_data, id_map_pre)
+        if dropped:
+            print(f"   Dropped {len(dropped)} spurious track group(s)")
+
+        track_first_frame = {}
+        for fd in frame_data:
+            for tid in fd["track_ids"]:
+                if tid not in track_first_frame:
+                    track_first_frame[tid] = fd["frame"]
+        group_first_frame = {}
+        for raw, root in id_map.items():
+            ff = track_first_frame.get(raw, 0)
+            if root not in group_first_frame or ff < group_first_frame[root]:
+                group_first_frame[root] = ff
+        ordered_roots = sorted(group_first_frame, key=lambda r: group_first_frame[r])
+        group_to_display = {root: i + 1 for i, root in enumerate(ordered_roots)}
+
+        display_boxes = []
+        for rb in frame_boxes:
+            disp = {}
+            for raw_id, bbox in rb.items():
+                gid = id_map.get(raw_id)
+                if gid is None:
+                    continue
+                disp[group_to_display[gid]] = bbox
+            display_boxes.append(disp)
+
+        if cache_path is not None:
+            cache_path = Path(cache_path)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cap_meta = cv2.VideoCapture(str(video_path))
+            _cache = {
+                "src_fps":      cap_meta.get(cv2.CAP_PROP_FPS) or 30.0,
+                "total_frames": int(cap_meta.get(cv2.CAP_PROP_FRAME_COUNT)),
+                "frame_w":      int(cap_meta.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                "frame_h":      int(cap_meta.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                "display_frame_boxes": [
+                    {str(k): list(v) for k, v in frame.items()}
+                    for frame in display_boxes
+                ],
+            }
+            cap_meta.release()
+            with open(cache_path, "w") as _f:
+                json.dump(_cache, _f)
+            print(f"   Tracking cache saved → {cache_path}")
+
+        return display_boxes
+
     def track_and_save_video(self, video_path, output_name=None, conf=0.25,
                              frame_skip=1, classes=None, tracker='bytetrack',
                              max_gap_frames=3600, max_dist_px=150,
@@ -774,6 +908,8 @@ class BearDetector:
         merge_decisions = []
         _, id_map_pre_filter = self._merge_fragmented_tracks(
             frame_data, max_gap_frames=max_gap_frames, max_dist_px=max_dist_px,
+            cooccurrence_tolerance_frames=cooccurrence_tolerance_frames,
+            cooccurrence_artifact_iou=cooccurrence_artifact_iou,
             decisions=merge_decisions,
         )
         # --- Filter spurious (short or low-confidence) groups ---
@@ -798,6 +934,26 @@ class BearDetector:
                 group_first_frame[root] = track_first_frame[raw]
         ordered_roots = sorted(group_first_frame.keys(), key=lambda r: group_first_frame[r])
         group_to_display = {root: i + 1 for i, root in enumerate(ordered_roots)}
+
+        # Save canonical tracking cache so feeding analysis can reuse without re-tracking
+        _cache_path = self.canonical_tracking_cache(video_path)
+        _cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cap_meta = cv2.VideoCapture(str(video_path))
+        _cache = {
+            "src_fps":      cap_meta.get(cv2.CAP_PROP_FPS) or 30.0,
+            "total_frames": int(cap_meta.get(cv2.CAP_PROP_FRAME_COUNT)),
+            "frame_w":      int(cap_meta.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            "frame_h":      int(cap_meta.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            "display_frame_boxes": [
+                {str(group_to_display[id_map[raw]]): list(bbox)
+                 for raw, bbox in fb.items() if raw in id_map and id_map[raw] in group_to_display}
+                for fb in frame_boxes
+            ],
+        }
+        cap_meta.release()
+        with open(_cache_path, "w") as _f:
+            json.dump(_cache, _f)
+        print(f"   Tracking cache saved → {_cache_path}")
 
         # BGR color palette — one consistent color per display ID
         palette = [

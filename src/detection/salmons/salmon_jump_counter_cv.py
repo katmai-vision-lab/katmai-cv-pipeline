@@ -53,18 +53,20 @@ class SalmonConfig:
 # ── Core CV functions (all accept cfg) ───────────────────────────────────────
 def extract_frames(video_path: str, sample_rate: int):
     cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    print(f"Video: {fps:.1f} fps, {total} frames ({total/fps:.1f}s)", file=sys.stderr)
-    idx = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if idx % sample_rate == 0:
-            yield idx, frame
-        idx += 1
-    cap.release()
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        print(f"Video: {fps:.1f} fps, {total} frames ({total/fps:.1f}s)", file=sys.stderr)
+        idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if idx % sample_rate == 0:
+                yield idx, frame
+            idx += 1
+    finally:
+        cap.release()
 
 
 def get_foreground_mask(frame, bg_subtractor):

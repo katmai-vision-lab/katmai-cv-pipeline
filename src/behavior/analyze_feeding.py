@@ -132,18 +132,58 @@ def parse_response(raw, bear_boxes):
     return behaviors
 
 
-def generate_summary(backend, entries, raw_frames, fps):
-    """Produce a narrative summary of feeding events across the whole video.
-
-    `backend` is any object satisfying the `BaseBehaviorBackend` interface
-    (Molmo2 / OpenAI / Anthropic / Gemini / custom).
+def count_salmon_catches(entries):
     """
+    Walk per-bear state timelines and count salmon catches.
+
+    catch_attempt   = transition into CATCHING from WAITING/LUNGING
+    confirmed_catch = CATCHING -> EATING  (bear secured the fish)
+    missed_catch    = CATCHING -> anything other than EATING
+    """
+    stage_re = re.compile(r"\[([A-Z]+)\]")
+
+    def get_stage(beh):
+        m = stage_re.search(beh or "")
+        return m.group(1) if m else None
+
+    bear_timelines: dict = {}
+    for e in entries:
+        t = e["timestamp_sec"]
+        for bid_str, bear in e["bears"].items():
+            stage = get_stage(bear.get("behavior", ""))
+            if stage:
+                bear_timelines.setdefault(int(bid_str), []).append((t, stage))
+
+    results = {}
+    for bid, timeline in bear_timelines.items():
+        attempts, confirmed, missed = 0, 0, 0
+        timestamps = []
+        prev = None
+        for t, stage in timeline:
+            if stage == "CATCHING" and prev != "CATCHING":
+                attempts += 1
+                timestamps.append(round(t, 2))
+            elif stage == "EATING" and prev == "CATCHING":
+                confirmed += 1
+            elif prev == "CATCHING" and stage not in ("CATCHING", "EATING"):
+                missed += 1
+            prev = stage
+        results[bid] = {
+            "catch_attempts":       attempts,
+            "confirmed_catches":    confirmed,
+            "missed_catches":       missed,
+            "catch_timestamps_sec": timestamps,
+        }
+    return results
+
+
+def generate_summary(backend, entries, video_path):
+    """Produce a narrative summary of feeding events across the whole video."""
     if not entries:
         return "No bears were detected in the video."
 
-    # Build a compact timeline of unique behavior states.
     timeline_lines = []
-    last_seen = {}  # bid -> behavior text
+    last_seen = {}
     for e in entries:
         t = e["timestamp_sec"]
         for bid_str, bear in e["bears"].items():
@@ -156,15 +196,14 @@ def generate_summary(backend, entries, raw_frames, fps):
 
     timeline_str = "\n".join(timeline_lines) if timeline_lines else "  (no behaviors recorded)"
 
-    # Pick a middle frame as visual context.
-    mid_idx = entries[len(entries) // 2]["frame_idx"]
-    ref_frame = raw_frames[mid_idx] if 0 <= mid_idx < len(raw_frames) else None
-    if ref_frame is None:
-        ref_frame = next((f for f in raw_frames if f is not None), None)
-
+    # Seek to a middle-of-video frame as visual context — read one frame, then release.
     image_pil = None
-    if ref_frame is not None:
-        # Downscale to keep summary inference within VRAM (helps Molmo2 specifically).
+    mid_idx = entries[len(entries) // 2]["frame_idx"]
+    cap = cv2.VideoCapture(str(video_path))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, mid_idx)
+    ret, ref_frame = cap.read()
+    cap.release()
+    if ret and ref_frame is not None:
         h, w = ref_frame.shape[:2]
         max_side = 512
         if max(h, w) > max_side:
@@ -183,6 +222,248 @@ def resolve_video(path_str):
         if candidate.exists():
             return candidate
     return p
+
+
+def run(
+    video_path: str,
+    output: str | None = None,
+    interval: float = 0.5,
+    model: str | None = None,
+    conf: float = 0.25,
+    iou: float = 0.7,
+    backend: str = "molmo2",
+    vision_model: str | None = None,
+    dedupe_threshold: float = 0.7,
+    save_frames: bool = False,
+) -> Path:
+    """
+    Run feeding behavior analysis on a video and return the output JSON path.
+
+    This is the programmatic entry point used by the TUI and other callers.
+    For CLI usage see main() below.
+    """
+    from types import SimpleNamespace
+
+    model = model or str(TRAINED_MODELS_DIR / "bear_detector3" / "weights" / "best.pt")
+    video_path_obj = resolve_video(video_path)
+    if not video_path_obj.exists():
+        raise FileNotFoundError(f"Video not found: {video_path}")
+
+    out_dir = PREDICTIONS_DIR / f"{video_path_obj.stem}_feeding_analysis"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json_path = Path(output) if output else out_dir / "analysis.json"
+    frames_dir = (out_dir / "sampled_frames") if save_frames else None
+    if frames_dir:
+        frames_dir.mkdir(exist_ok=True)
+
+    args = SimpleNamespace(
+        video=str(video_path_obj),
+        output=str(json_path),
+        interval=interval,
+        model=model,
+        conf=conf,
+        iou=iou,
+        backend=backend,
+        vision_model=vision_model,
+        dedupe_threshold=dedupe_threshold,
+        save_frames=save_frames,
+    )
+    _run_analysis(args, video_path_obj, json_path, frames_dir)
+    return json_path
+
+
+def _run_analysis(args, video_path, json_path, frames_dir):
+    """Core analysis logic, shared by run() and main()."""
+    print("=" * 60)
+    print("Bear Feeding Behavior Analysis")
+    print("=" * 60)
+    print(f"Video        : {video_path}")
+    print(f"Output       : {json_path}")
+    print(f"Interval     : {args.interval}s")
+    print(f"YOLO model   : {Path(args.model).name}")
+    print(f"Backend      : {args.backend}")
+    print(f"Vision model : {args.vision_model or '(backend default)'}")
+    print("=" * 60)
+
+    out_dir       = json_path.parent
+    progress_path = out_dir / "entries_progress.jsonl"
+
+    # ── Steps 1+2: ByteTrack + merge ─────────────────────────────────────────
+    # Use the canonical cache shared with track_and_save_video so a prior
+    # bear-tracking run on the same video skips ByteTrack entirely here.
+    canonical_cache = BearDetector.canonical_tracking_cache(video_path)
+
+    if canonical_cache.exists():
+        print(f"\n[1/3] Loading cached tracking results ({canonical_cache})...")
+        with open(canonical_cache) as f:
+            cache = json.load(f)
+        src_fps      = cache["src_fps"]
+        total_frames = cache["total_frames"]
+        frame_w      = cache["frame_w"]
+        frame_h      = cache["frame_h"]
+        display_frame_boxes = [
+            {int(k): tuple(v) for k, v in frame.items()}
+            for frame in cache["display_frame_boxes"]
+        ]
+        print(f"  ✓ {len(display_frame_boxes)} frames loaded from cache")
+        print("\n[2/3] Skipped (cached).")
+    else:
+        print("\n[1/3] Running YOLO + ByteTrack...")
+        detector = BearDetector(model_path=args.model)
+
+        cap_probe = cv2.VideoCapture(str(video_path))
+        src_fps      = cap_probe.get(cv2.CAP_PROP_FPS) or 30.0
+        total_frames = int(cap_probe.get(cv2.CAP_PROP_FRAME_COUNT))
+        frame_w      = int(cap_probe.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_h      = int(cap_probe.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap_probe.release()
+
+        display_frame_boxes = detector.compute_display_boxes(
+            video_path, conf=args.conf, iou=args.iou,
+            show_progress=True, cache_path=canonical_cache,
+        )
+        print("\n[2/3] Merging fragmented tracks...")
+
+    # ── Step 3: VLM analysis ──────────────────────────────────────────────────
+    print(f"\n[3/3] Running vision model (every {args.interval}s, backend={args.backend})...")
+    backend = load_vision_backend(args.backend, args.vision_model)
+
+    interval_frames = max(1, int(args.interval * src_fps))
+    sample_indices  = list(range(0, len(display_frame_boxes), interval_frames))
+
+    # Resume from existing progress if available
+    entries = []
+    done_indices = set()
+    prev_behaviors = {}
+    if progress_path.exists():
+        with open(progress_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    entry = json.loads(line)
+                    entries.append(entry)
+                    done_indices.add(entry["frame_idx"])
+        if entries:
+            last = entries[-1]
+            prev_behaviors = {
+                int(bid): bear["behavior"]
+                for bid, bear in last["bears"].items()
+                if bear.get("behavior")
+            }
+            print(f"  ✓ Resuming from {len(entries)} saved entries (last: t={last['timestamp_sec']:.1f}s)")
+
+    stage_re = re.compile(r"\[([A-Z]+)\]")
+
+    def extract_stage(text):
+        m = stage_re.search(text or "")
+        return m.group(1) if m else None
+
+    def behaviors_changed(new_behaviors, prev_behaviors, threshold):
+        if set(new_behaviors.keys()) != set(prev_behaviors.keys()):
+            return True
+        for bid, new_text in new_behaviors.items():
+            old_text = prev_behaviors.get(bid, "")
+            if not old_text or not new_text:
+                return True
+            if extract_stage(new_text) != extract_stage(old_text):
+                return True
+            ratio = SequenceMatcher(None, old_text.lower(), new_text.lower()).ratio()
+            if ratio < threshold:
+                return True
+        return False
+
+    cap_sample   = cv2.VideoCapture(str(video_path))
+    progress_f   = open(progress_path, "a")
+    remaining    = [i for i in sample_indices if i not in done_indices]
+    try:
+        for idx in tqdm(remaining, desc="  Analyzing"):
+            cap_sample.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame_bgr = cap_sample.read()
+            if not ret or frame_bgr is None:
+                continue
+
+            bear_boxes    = display_frame_boxes[idx]
+            timestamp_sec = idx / src_fps
+
+            if bear_boxes:
+                annotated = annotate_frame(frame_bgr, bear_boxes)
+                if args.save_frames and frames_dir:
+                    cv2.imwrite(str(frames_dir / f"frame_{idx:06d}_t{timestamp_sec:.1f}s.jpg"), annotated)
+                prompt       = build_prompt(bear_boxes, frame_w, frame_h)
+                image_pil    = Image.fromarray(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB))
+                raw_response = backend.analyze_frame(image_pil, prompt)
+                behaviors    = parse_response(raw_response, bear_boxes)
+            else:
+                raw_response = "(no bears detected)"
+                behaviors    = {}
+
+            changed = behaviors_changed(behaviors, prev_behaviors, args.dedupe_threshold)
+            if changed:
+                prev_behaviors = dict(behaviors)
+                status = "NEW"
+            else:
+                behaviors = dict(prev_behaviors)
+                status    = "same"
+
+            entry = {
+                "timestamp_sec": round(timestamp_sec, 3),
+                "frame_idx":     idx,
+                "changed":       changed,
+                "bears": {
+                    str(bid): {
+                        "bbox":          list(bear_boxes[bid][:4]),
+                        "conf":          round(float(bear_boxes[bid][4]), 3),
+                        "position_hint": position_hint(*bear_boxes[bid][:4], frame_w, frame_h),
+                        "behavior":      behaviors.get(bid, ""),
+                    }
+                    for bid in sorted(bear_boxes.keys())
+                },
+                "raw_response": raw_response,
+            }
+            entries.append(entry)
+            progress_f.write(json.dumps(entry) + "\n")
+            progress_f.flush()
+            tqdm.write(f"  t={timestamp_sec:.1f}s  [{status}]  bears={list(bear_boxes.keys())}  behaviors={behaviors}")
+    finally:
+        cap_sample.release()
+        progress_f.close()
+
+    # Sort entries by timestamp in case of out-of-order resume
+    entries.sort(key=lambda e: e["frame_idx"])
+
+    print("\n[4/4] Generating whole-video summary...")
+    if torch.cuda.is_available(): torch.cuda.empty_cache()
+    summary = generate_summary(backend, entries, raw_frames, src_fps)
+    print(f"\nSummary:\n{summary}\n")
+
+    salmon_counts = count_salmon_catches(entries)
+
+    output_data = {
+        "video": str(video_path),
+        "fps": src_fps,
+        "total_frames": total_frames,
+        "frame_size": [frame_w, frame_h],
+        "interval_sec": args.interval,
+        "yolo_model": args.model,
+        "backend": args.backend,
+        "vision_model": args.vision_model or backend.name,
+        "created": datetime.now().isoformat(),
+        "summary": summary,
+        "salmon_counts": {str(k): v for k, v in salmon_counts.items()},
+        "entries": entries,
+    }
+    with open(json_path, "w") as f:
+        json.dump(output_data, f, indent=2)
+
+    print("\nSalmon catch summary:")
+    for bid, counts in sorted(salmon_counts.items()):
+        print(f"  Bear {bid}: {counts['confirmed_catches']} confirmed catch(es), "
+              f"{counts['catch_attempts']} attempt(s), "
+              f"{counts['missed_catches']} miss(es)  "
+              f"@ {counts['catch_timestamps_sec']}")
+    print(f"\n✓ Done. {len(entries)} entries saved to: {json_path}")
+    print(f"\nNext step:")
+    print(f"  python -m src.behavior.feeding_viewer --video \"{video_path}\" --analysis \"{json_path}\"")
 
 
 def main():
@@ -230,197 +511,7 @@ def main():
     if frames_dir:
         frames_dir.mkdir(exist_ok=True)
 
-    print("=" * 60)
-    print("Bear Feeding Behavior Analysis")
-    print("=" * 60)
-    print(f"Video        : {video_path}")
-    print(f"Output       : {json_path}")
-    print(f"Interval     : {args.interval}s")
-    print(f"YOLO model   : {Path(args.model).name}")
-    print(f"Backend      : {args.backend}")
-    print(f"Vision model : {args.vision_model or '(backend default)'}")
-    print("=" * 60)
-
-    # ------------------------------------------------------------------
-    # Step 1: YOLO + ByteTrack — collect per-frame detections
-    # ------------------------------------------------------------------
-    print("\n[1/3] Running YOLO + ByteTrack...")
-    detector = BearDetector(model_path=args.model)
-
-    cap_probe = cv2.VideoCapture(str(video_path))
-    src_fps = cap_probe.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = int(cap_probe.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_w = int(cap_probe.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_h = int(cap_probe.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    cap_probe.release()
-
-    tracker_cfg = str(TRACKERS_CONFIG_DIR / "bytetrack.yaml")
-    results_stream = detector.model.track(
-        source=str(video_path),
-        conf=args.conf,
-        iou=args.iou,
-        classes=[0],
-        tracker=tracker_cfg,
-        save=False,
-        stream=True,
-        verbose=False,
-        persist=True,
-    )
-
-    frame_data = []
-    frame_boxes = []   # [{raw_track_id: (x1,y1,x2,y2,conf)}, ...]
-    raw_frames = []    # BGR frames, parallel to frame_boxes
-
-    cap_full = cv2.VideoCapture(str(video_path))
-    for result in tqdm(results_stream, total=total_frames, desc="  Tracking"):
-        ret, bgr = cap_full.read()
-        raw_frames.append(bgr if ret else None)
-
-        track_ids, track_positions, box_data = [], {}, {}
-        if result.boxes.id is not None:
-            track_ids = result.boxes.id.cpu().numpy().astype(int).tolist()
-            xyxy = result.boxes.xyxy.cpu().numpy()
-            xywh = result.boxes.xywh.cpu().numpy()
-            confs = result.boxes.conf.cpu().numpy()
-            for i, tid in enumerate(track_ids):
-                track_positions[tid] = (float(xywh[i][0]), float(xywh[i][1]))
-                box_data[tid] = (
-                    int(xyxy[i][0]), int(xyxy[i][1]),
-                    int(xyxy[i][2]), int(xyxy[i][3]),
-                    float(confs[i]),
-                )
-        frame_data.append({
-            "frame": len(frame_data),
-            "track_ids": track_ids,
-            "track_positions": track_positions,
-        })
-        frame_boxes.append(box_data)
-    cap_full.release()
-
-    # ------------------------------------------------------------------
-    # Step 2: Merge fragmented track IDs → stable display IDs
-    # ------------------------------------------------------------------
-    print("\n[2/3] Merging fragmented tracks...")
-    _, id_map = detector._merge_fragmented_tracks(frame_data)
-    unique_groups = sorted(set(id_map.values()))
-    group_to_display = {g: i + 1 for i, g in enumerate(unique_groups)}
-
-    display_frame_boxes = []
-    for raw_boxes in frame_boxes:
-        disp = {}
-        for raw_id, bbox in raw_boxes.items():
-            gid = id_map.get(raw_id, raw_id)
-            did = group_to_display.get(gid, raw_id)
-            disp[did] = bbox
-        display_frame_boxes.append(disp)
-
-    # ------------------------------------------------------------------
-    # Step 3: Sample frames + vision model analysis
-    # ------------------------------------------------------------------
-    print(f"\n[3/3] Running vision model (every {args.interval}s, backend={args.backend})...")
-    backend = load_vision_backend(args.backend, args.vision_model)
-
-    interval_frames = max(1, int(args.interval * src_fps))
-    sample_indices = list(range(0, len(raw_frames), interval_frames))
-    entries = []
-    prev_behaviors = {}  # {bear_id: behavior_str} from last accepted update
-
-    stage_re = re.compile(r"\[([A-Z]+)\]")
-
-    def extract_stage(text):
-        m = stage_re.search(text or "")
-        return m.group(1) if m else None
-
-    def behaviors_changed(new_behaviors, prev_behaviors, threshold):
-        """Return True if any bear's behavior meaningfully changed."""
-        if set(new_behaviors.keys()) != set(prev_behaviors.keys()):
-            return True  # bears appeared or disappeared
-        for bid, new_text in new_behaviors.items():
-            old_text = prev_behaviors.get(bid, "")
-            if not old_text or not new_text:
-                return True
-            # Stage change always counts as a meaningful change.
-            if extract_stage(new_text) != extract_stage(old_text):
-                return True
-            ratio = SequenceMatcher(None, old_text.lower(), new_text.lower()).ratio()
-            if ratio < threshold:
-                return True  # this bear's behavior changed enough
-        return False
-
-    for idx in tqdm(sample_indices, desc="  Analyzing"):
-        frame_bgr = raw_frames[idx]
-        if frame_bgr is None:
-            continue
-
-        bear_boxes = display_frame_boxes[idx]
-        timestamp_sec = idx / src_fps
-
-        if bear_boxes:
-            annotated = annotate_frame(frame_bgr, bear_boxes)
-            if args.save_frames and frames_dir:
-                cv2.imwrite(str(frames_dir / f"frame_{idx:06d}_t{timestamp_sec:.1f}s.jpg"), annotated)
-            prompt = build_prompt(bear_boxes, frame_w, frame_h)
-            image_pil = Image.fromarray(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB))
-            raw_response = backend.analyze_frame(image_pil, prompt)
-            behaviors = parse_response(raw_response, bear_boxes)
-        else:
-            raw_response = "(no bears detected)"
-            behaviors = {}
-
-        # Deduplicate: if behavior hasn't meaningfully changed, reuse previous text
-        changed = behaviors_changed(behaviors, prev_behaviors, args.dedupe_threshold)
-        if changed:
-            prev_behaviors = dict(behaviors)
-            status = "NEW"
-        else:
-            behaviors = dict(prev_behaviors)
-            status = "same"
-
-        entry = {
-            "timestamp_sec": round(timestamp_sec, 3),
-            "frame_idx": idx,
-            "changed": changed,
-            "bears": {
-                str(bid): {
-                    "bbox": list(bear_boxes[bid][:4]),
-                    "conf": round(float(bear_boxes[bid][4]), 3),
-                    "position_hint": position_hint(*bear_boxes[bid][:4], frame_w, frame_h),
-                    "behavior": behaviors.get(bid, ""),
-                }
-                for bid in sorted(bear_boxes.keys())
-            },
-            "raw_response": raw_response,
-        }
-        entries.append(entry)
-        tqdm.write(f"  t={timestamp_sec:.1f}s  [{status}]  bears={list(bear_boxes.keys())}  behaviors={behaviors}")
-
-    # ------------------------------------------------------------------
-    # Step 4: Whole-video summary
-    # ------------------------------------------------------------------
-    print("\n[4/4] Generating whole-video summary...")
-    torch.cuda.empty_cache()
-    summary = generate_summary(backend, entries, raw_frames, src_fps)
-    print(f"\nSummary:\n{summary}\n")
-
-    output = {
-        "video": str(video_path),
-        "fps": src_fps,
-        "total_frames": total_frames,
-        "frame_size": [frame_w, frame_h],
-        "interval_sec": args.interval,
-        "yolo_model": args.model,
-        "backend": args.backend,
-        "vision_model": args.vision_model or backend.name,
-        "created": datetime.now().isoformat(),
-        "summary": summary,
-        "entries": entries,
-    }
-    with open(json_path, "w") as f:
-        json.dump(output, f, indent=2)
-
-    print(f"\n✓ Done. {len(entries)} entries saved to: {json_path}")
-    print(f"\nNext step:")
-    print(f"  python -m src.behavior.feeding_viewer --video \"{video_path}\" --analysis \"{json_path}\"")
+    _run_analysis(args, video_path, json_path, frames_dir)
 
 
 if __name__ == "__main__":

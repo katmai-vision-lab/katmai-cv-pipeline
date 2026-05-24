@@ -52,6 +52,60 @@ python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 python -c "import transformers; print('transformers version:', transformers.__version__)"
 ```
 
+### macOS / Windows installation notes
+
+The pipeline is developed and tested on **Linux + NVIDIA GPU**, but every
+module is written to be cross-platform — `src/config.get_device()`
+auto-detects CUDA / MPS / CPU at runtime and `torch.cuda.empty_cache()`
+calls are guarded against non-CUDA environments. Below are platform-
+specific notes for getting things running.
+
+#### macOS
+
+- **Apple Silicon (M1 / M2 / M3 / M4)** — supported via PyTorch MPS:
+  ```bash
+  # Install CPU/MPS-only PyTorch (no CUDA on Mac)
+  pip install torch torchvision
+  ```
+  Auto-detected at runtime. Local Molmo2-8B runs on MPS at roughly the
+  speed of a mid-range NVIDIA card, but needs ~14 GB of unified memory
+  for FP16 (8 GB Macs should use the cloud VLM backends instead).
+- **Intel Mac** — CPU only. YOLOv8 + ByteTrack + pixel detector work
+  but slowly; recommend using cloud VLM backends (`--backend anthropic`
+  or `--backend gemini`) for behavior classification.
+- **FFmpeg** (needed by the `--render` flag of the pixel-eating
+  detector): `brew install ffmpeg`.
+- **`PytorchWildlife`** (MegaDetector) occasionally has dependency
+  conflicts on macOS. If `pip install PytorchWildlife` fails, install
+  it without dependencies and let the existing torch / torchvision
+  stack stay intact:
+  ```bash
+  pip install --no-deps PytorchWildlife
+  ```
+
+#### Windows
+
+- **Recommended: WSL2 + Ubuntu 22.04**. Install WSL2, then `wsl --install -d Ubuntu-22.04`,
+  and follow the Linux installation steps inside the WSL shell. This
+  is the smoothest path on Windows and avoids most quoting / shell
+  differences in the example commands.
+- **Native Windows (PowerShell)** also works:
+  - Install PyTorch with CUDA from the same `--index-url`.
+  - Convert the multi-line `bash` commands in this README to single
+    lines or use PowerShell backtick (`` ` ``) continuations.
+  - Install FFmpeg from <https://www.gyan.dev/ffmpeg/builds/> and add
+    its `bin/` directory to `PATH`.
+- **No NVIDIA GPU on Windows**: the local Molmo2 backend will not fit;
+  use a cloud VLM backend (`--backend gemini` is cheapest) and the
+  rest of the pipeline runs on CPU.
+
+#### Device-selection summary
+
+Every CLI that runs a model exposes a `--device` flag. Passing nothing
+auto-detects: **CUDA → MPS → CPU**, in that order. Pass `--device cpu`
+to force CPU on a GPU machine for reproducibility, or `--device mps`
+on Apple Silicon if you want to be explicit.
+
 ### Features
 - **Model Arena Evaluation**: Scientifically validated model weights based on 341 test images
   - Grounding DINO: 0.406 weight (89.3% precision, 99.8% recall)
@@ -701,6 +755,19 @@ python src/detection/salmons/visualize_salmon_jumps.py data/raw/salmons/salmon_j
 
 ### Parameters
 ![alt text](/docs/images/salmon-params.png)
+
+## Background Filter + OpenCV
+### Usage with opions
+# Step 1: run interactively, watch the mask, tune trackbars
+python src/detection/salmons/salmon_jump_counter_bg.py --video data/raw/salmons/salmon_jump_9.mov
+
+# Step 2: re-run with the values printed in the terminal (no interactive steps)
+python src/detection/salmons/salmon_jump_counter_bg.py --video data/raw/salmons/salmon_jump_9.mov \
+  --roi 434,720,710,1062 \
+  --line-y 850 \
+  --var-threshold 40\
+  --min-area 300 \
+  --output data/raw/salmons/salmon_jump_9_result.mp4
 
 ## Useful Link
 SharePoint:s

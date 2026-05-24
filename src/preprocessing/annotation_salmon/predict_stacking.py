@@ -305,8 +305,8 @@ def main():
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
-        help="Device to run models on"
+        default=None,
+        help="Device to run models on: cuda / mps / cpu (default: auto-detect)"
     )
     parser.add_argument(
         "--visualize",
@@ -315,7 +315,11 @@ def main():
     )
     
     args = parser.parse_args()
-    
+
+    if args.device is None:
+        from src.config import get_device
+        args.device = get_device()
+
     predict_with_stacking(
         images_dir=Path(args.images),
         stacker_path=Path(args.stacker),

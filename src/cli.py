@@ -7,8 +7,11 @@ import glob
 import json
 import readline
 import sys
-import termios
-import tty
+import os
+import platform
+if platform.system() != "Windows":
+    import termios
+    import tty
 from pathlib import Path
 from typing import Optional
 
@@ -43,17 +46,32 @@ c = Console()
 # ── Raw single-keypress ───────────────────────────────────────────────────────
 
 def _getch() -> str:
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        ch = sys.stdin.read(1)
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-    if ch == "\x03":
-        raise KeyboardInterrupt
-    return ch
-
+    if os.name == "nt":
+        import msvcrt
+        while True:
+            ch = msvcrt.getch()
+            # Swallow the second byte of special keys (arrows, F-keys, etc.)
+            if ch in (b'\x00', b'\xe0'):
+                msvcrt.getch()
+                continue
+            ch = ch.decode("utf-8", errors="ignore")
+            if ch == "\x03":
+                raise KeyboardInterrupt
+            return ch
+    else:
+        import termios
+        import tty
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        if ch == "\x03":
+            raise KeyboardInterrupt
+        return ch
+    
 def _key(prompt: str, valid: str, default: str = "") -> str:
     """Print prompt then wait for a single valid keypress (no Enter needed)."""
     opts = "/".join(
@@ -150,18 +168,21 @@ def _menu() -> str:
     c.print()
     t = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
     t.add_column(style="bold cyan", width=4)
-    t.add_column(style="white", min_width=16)
+    t.add_column(style="white", min_width=20)
     t.add_column(style="dim")
-    t.add_row("1", "Track bears",    "ByteTrack · annotated output video with bounding boxes")
-    t.add_row("2", "Count bears",    "per-video bear counts · optional unique-bear tracking")
-    t.add_row("3", "Evaluate model", "mAP · precision · recall · counting accuracy vs ground truth")
-    t.add_row("4", "Train model",    "fine-tune YOLOv8n on a new labeled dataset")
+    t.add_row("1", "Track bears",          "ByteTrack · annotated output video with bounding boxes")
+    t.add_row("2", "Count bears",          "per-video bear counts · optional unique-bear tracking")
+    t.add_row("3", "Detect feeding events","VLM frame analysis · timestamped behavior JSON")
+    t.add_row("4", "Count salmon jumps",   "CV-based jump detection · jump count + timestamps")
+    t.add_row("5", "Fetch environmental data", "RAWS · NADP · USGS · weather, precipitation, hydrology")
+    t.add_row("6", "Evaluate model",       "mAP · precision · recall · counting accuracy vs ground truth")
+    t.add_row("7", "Train model",          "fine-tune YOLOv8n on a new labeled dataset")
     t.add_row("q", "Quit", "")
     c.print(Panel(t, title="[bold]Main Menu[/bold]", border_style="cyan", padding=(0, 1)))
-    c.print(f"\n  [cyan]Select[/cyan]  [dim](1/2/3/4/q)[/dim] : ", end="")
+    c.print(f"\n  [cyan]Select[/cyan]  [dim](1/2/3/4/5/6/7/q)[/dim] : ", end="")
     while True:
         ch = _getch()
-        if ch in "1234q":
+        if ch in "1234567q":
             c.print(ch)
             return ch
 
@@ -293,7 +314,250 @@ def _show_count_results(res: dict):
                 f"time {agg.get('total_processing_time',0):.1f}s[/dim]")
 
 
-# ── 3. Evaluate ───────────────────────────────────────────────────────────────
+# ── 3. Detect feeding events ─────────────────────────────────────────────────
+
+def detect_feeding():
+    c.print(); _header("Detect Feeding Events",
+                       "YOLO + ByteTrack  ·  VLM frame analysis  ·  timestamped behavior JSON")
+
+    video = _pick_video()
+    if not video: return _err("No video selected.")
+
+    backend = _key("VLM backend", "maog", "m")
+    # m=molmo2, a=anthropic, o=openai, g=gemini
+    backend_map = {"m": "molmo2", "a": "anthropic", "o": "openai", "g": "gemini"}
+    backend_name = backend_map[backend]
+
+    model    = _ask("YOLO weights",  MODEL,  "path to .pt bear detector weights")
+    interval = float(_ask("Sample interval", "0.5", "analyze one frame every N seconds"))
+    conf     = float(_ask("Confidence",      "0.25","min detection score  (0–1)"))
+
+    c.print()
+    _config({"video": Path(video).name, "backend": backend_name,
+             "interval": f"{interval}s", "confidence": conf})
+
+    if not _confirm("Run?"):
+        return
+
+    _step(f"Starting analysis with {backend_name} backend…")
+    c.print("  [dim]Progress will appear below. This may take several minutes.[/dim]\n")
+    try:
+        from src.behavior.analyze_feeding import run as run_feeding
+        json_path = run_feeding(
+            video_path=video,
+            interval=interval,
+            model=model,
+            conf=conf,
+            backend=backend_name,
+        )
+        _ok(f"Analysis saved → {json_path}")
+        c.print(f"\n  [dim]View with:[/dim]  python -m src.behavior.feeding_viewer "
+                f"--video \"{Path(video).name}\" --analysis \"{json_path}\"")
+    except KeyboardInterrupt:
+        c.print("\n  [yellow]Cancelled.[/yellow]")
+    except Exception as e:
+        _err(str(e))
+
+
+# ── 4. Count salmon jumps ─────────────────────────────────────────────────────
+
+def count_salmon_jumps():
+    c.print(); _header("Count Salmon Jumps",
+                       "CV blob detection  ·  jump count + timestamps  ·  JSON output")
+
+    video = _pick_video()
+    if not video: return _err("No video selected.")
+
+    c.print("\n  [dim]Tip: default config works well for Brooks Falls footage.[/dim]")
+    custom = _confirm("Customise detection parameters?", default=False)
+
+    cfg_path = None
+    if custom:
+        cfg_path = _ask("Config JSON path", "", "optional — leave blank for built-in defaults")
+        cfg_path = cfg_path or None
+
+    debug = _confirm("Save debug frames?", default=False)
+
+    c.print()
+    _config({"video": Path(video).name,
+             "config": cfg_path or "(defaults)",
+             "debug_frames": debug})
+
+    if not _confirm("Run?"):
+        return
+
+    out_dir = PREDICTIONS_DIR / "salmon_jumps"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    debug_dir = str(out_dir / f"{Path(video).stem}_debug") if debug else None
+
+    _step("Running salmon jump counter…")
+    try:
+        from src.detection.salmons.salmon_jump_counter_cv import (
+            SalmonConfig, count_salmon_jumps as _count,
+        )
+        import json as _json
+
+        cfg = SalmonConfig.from_file(cfg_path) if cfg_path else SalmonConfig()
+        result = _count(video, cfg, debug_output=debug_dir)
+
+        out_path = out_dir / f"{Path(video).stem}_jumps.json"
+        with open(out_path, "w") as f:
+            _json.dump(result, f, indent=2)
+
+        t = Table(box=box.ROUNDED, border_style="cyan")
+        t.add_column("Metric", style="cyan")
+        t.add_column("Value",  style="bold green", justify="right")
+        t.add_row("Jump count",  str(result["jump_count"]))
+        t.add_row("Video FPS",   f"{result['fps']:.1f}")
+        t.add_row("Sample rate", f"every {result['sample_rate']} frames")
+        c.print(); c.print(t)
+
+        if result["jump_timestamps_sec"]:
+            c.print(f"\n  [dim]Timestamps (s):[/dim] "
+                    f"{', '.join(str(t) for t in result['jump_timestamps_sec'][:10])}"
+                    + (" …" if len(result["jump_timestamps_sec"]) > 10 else ""))
+
+        _ok(f"Saved → {out_path}")
+    except KeyboardInterrupt:
+        c.print("\n  [yellow]Cancelled.[/yellow]")
+    except Exception as e:
+        _err(str(e))
+
+
+# ── 5. Fetch environmental data ───────────────────────────────────────────────
+
+def fetch_environmental_data():
+    c.print(); _header("Fetch Environmental Data",
+                       "RAWS weather  ·  NADP precipitation  ·  USGS hydrology  ·  all fetched together")
+
+    t = Table(box=box.SIMPLE, show_header=True, padding=(0, 1))
+    t.add_column("Source", style="bold cyan",  width=6)
+    t.add_column("Station / Site",  style="white",    min_width=34)
+    t.add_column("Variables",       style="dim")
+    t.add_row("RAWS", "ATHF Three Forks · ACOV Coville · APFA Pfaff Mine",
+              "hourly wind, temp, humidity, precip")
+    t.add_row("NADP", "AK97 Southwest Alaska",
+              "daily precipitation (inches)")
+    t.add_row("USGS", "Kvichak River at Igiugig (~106 km from Brooks Falls)",
+              "15-min water level, stream flow, water temp")
+    c.print(); c.print(t)
+
+    from datetime import date as _date
+    date_str = _ask("Date", _date.today().isoformat(), "YYYY-MM-DD  (bear season: Jul–Sep)")
+    c.print("  [cyan]Output format[/cyan]  [dim](json/csv)[/dim] : ", end="")
+    while True:
+        ch = _getch().lower()
+        if ch in "jc\r\n":
+            fmt_name = "csv" if ch == "c" else "json"
+            c.print(fmt_name)
+            break
+
+    c.print()
+    _config({"date": date_str, "format": fmt_name, "sources": "RAWS + NADP + USGS"})
+    if not _confirm("Fetch all three sources?"):
+        return
+
+    try:
+        from datetime import datetime as _dt
+        d = _dt.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return _err(f"Invalid date '{date_str}'. Use YYYY-MM-DD.")
+
+    rows = []  # (source, station_label, n_records, out_path_str, error_str)
+
+    # ── RAWS (all three stations) ─────────────────────────────────────────────
+    _step("RAWS — fetching wind / temperature / humidity…")
+    try:
+        from src.environment.raws_weather import (
+            fetch_day as _raws_fetch, save_json as _raws_json, save_csv as _raws_csv,
+        )
+        raws = _raws_fetch(d.year, d.month, d.day, station_ids=None)
+        out  = PREDICTIONS_DIR / "raws_weather" / f"{date_str}_all-stations.{fmt_name}"
+        (_raws_csv if fmt_name == "csv" else _raws_json)(raws, out)
+        n     = sum(len(v) for v in raws["stations"].values())
+        errs  = raws.get("errors", {})
+        note  = f"{len(errs)} station(s) offline" if errs else ""
+        rows.append(("RAWS", "ATHF / ACOV / APFA", n, str(out), note))
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        rows.append(("RAWS", "ATHF / ACOV / APFA", 0, "", str(e)))
+
+    # ── NADP precipitation ────────────────────────────────────────────────────
+    _step("NADP — fetching daily precipitation…")
+    try:
+        from src.environment.nadp_precip import (
+            fetch_day as _nadp_fetch, save_json as _nadp_json, save_csv as _nadp_csv,
+        )
+        nadp = _nadp_fetch(d.year, d.month, d.day, site_ids=["AK97"])
+        out  = PREDICTIONS_DIR / "nadp_precip" / f"{date_str}_AK97.{fmt_name}"
+        (_nadp_csv if fmt_name == "csv" else _nadp_json)(nadp, out)
+        n    = sum(len(v) for v in nadp["sites"].values())
+        errs = nadp.get("errors", {})
+        note = "; ".join(errs.values()) if errs else ""
+        rows.append(("NADP", "AK97", n, str(out), note))
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        rows.append(("NADP", "AK97", 0, "", str(e)))
+
+    # ── USGS hydrology ────────────────────────────────────────────────────────
+    _step("USGS — fetching water level / stream flow / water temp…")
+    try:
+        from src.environment.usgs_hydro import (
+            fetch_day as _usgs_fetch, save_json as _usgs_json, save_csv as _usgs_csv,
+        )
+        usgs = _usgs_fetch(date_str)
+        out  = PREDICTIONS_DIR / "usgs_hydro" / f"{date_str}.{fmt_name}"
+        (_usgs_csv if fmt_name == "csv" else _usgs_json)(usgs, out)
+        n    = len(usgs.get("readings", []))
+        errs = usgs.get("errors", [])
+        note = "; ".join(errs) if errs else ""
+        rows.append(("USGS", "Kvichak River (15300500)", n, str(out), note))
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        rows.append(("USGS", "Kvichak River (15300500)", 0, "", str(e)))
+
+    # ── Results summary ───────────────────────────────────────────────────────
+    c.print()
+    t = Table(title="Environmental Data Results", box=box.ROUNDED, border_style="cyan")
+    t.add_column("Source",         style="bold cyan", width=6)
+    t.add_column("Station / Site", style="white",     min_width=26)
+    t.add_column("Records",        style="bold green", justify="right", width=8)
+    t.add_column("Saved to",       style="dim",        max_width=46, no_wrap=True, overflow="ellipsis")
+    t.add_column("",               width=3,            justify="center")
+
+    all_ok = True
+    for source, label, n, path, err in rows:
+        if err and n == 0:
+            status  = "[red]✗[/red]"
+            rec_str = "[dim]—[/dim]"
+            path_str = f"[red]{err[:44]}[/red]"
+            all_ok = False
+        elif err:
+            status   = "[yellow]⚠[/yellow]"
+            rec_str  = str(n)
+            path_str = Path(path).name
+        else:
+            status   = "[green]✓[/green]"
+            rec_str  = str(n)
+            path_str = Path(path).name
+        t.add_row(source, label, rec_str, path_str, status)
+
+    c.print(t)
+
+    for source, _, n, _, err in rows:
+        if err and n > 0:
+            c.print(f"  [yellow]⚠[/yellow]  {source}: {err}")
+
+    if all_ok:
+        _ok(f"All sources fetched → {PREDICTIONS_DIR}")
+    else:
+        c.print(f"\n  [yellow]Some sources failed — check errors above.[/yellow]")
+
+
+# ── 6. Evaluate ───────────────────────────────────────────────────────────────
 
 def evaluate():
     c.print(); _header("Evaluate Model", "mAP · precision · recall · counting accuracy")
@@ -413,7 +677,15 @@ def train():
 
 def main():
     _welcome()
-    dispatch = {"1": track_bears, "2": count_bears, "3": evaluate, "4": train}
+    dispatch = {
+        "1": track_bears,
+        "2": count_bears,
+        "3": detect_feeding,
+        "4": count_salmon_jumps,
+        "5": fetch_environmental_data,
+        "6": evaluate,
+        "7": train,
+    }
     while True:
         try:
             ch = _menu()
