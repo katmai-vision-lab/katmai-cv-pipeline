@@ -790,6 +790,7 @@ class BearDetector:
 
     def track_and_save_video(self, video_path, output_name=None, conf=0.25,
                              frame_skip=1, classes=None, tracker='bytetrack',
+                             imgsz=1280,
                              max_gap_frames=3600, max_dist_px=150,
                              cooccurrence_tolerance_frames=60,
                              cooccurrence_artifact_iou=0.3,
@@ -841,6 +842,7 @@ class BearDetector:
                     _sc.get("model")      == self.model_path.name
                     and _sc.get("conf")       == conf
                     and _sc.get("frame_skip") == frame_skip
+                    and _sc.get("imgsz")      == imgsz
                     and _cached_video is not None
                 ):
                     print(f"   Tracking save cache hit → {_save_cache_path.parent.name}", flush=True)
@@ -862,6 +864,7 @@ class BearDetector:
             conf=conf,
             classes=classes,
             tracker=tracker if tracker.endswith('.yaml') else f'{tracker}.yaml',
+            imgsz=imgsz,
             save=False,
             stream=True,
             verbose=False,
@@ -1208,7 +1211,8 @@ class BearDetector:
         _save_cache_path.parent.mkdir(parents=True, exist_ok=True)
         with open(_save_cache_path, "w") as _f:
             json.dump({"model": self.model_path.name, "conf": conf,
-                       "frame_skip": frame_skip, "output_dir": str(output_dir)}, _f)
+                       "frame_skip": frame_skip, "imgsz": imgsz,
+                       "output_dir": str(output_dir)}, _f)
         print(f"   Track save cache saved → {_save_cache_path.parent.name}", flush=True)
 
         return None, output_dir
