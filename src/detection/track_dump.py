@@ -47,9 +47,10 @@ def main():
                         help="Filter: drop groups shorter than this many frames (default 30)")
     parser.add_argument("--min-mean-conf", type=float, default=0.80,
                         help="Filter: drop groups whose mean conf < this (default 0.80)")
-    parser.add_argument("--imgsz", type=int, default=640,
-                        help="YOLO inference image size (default 640). Try 1280 for "
-                             "better recall on light-colored or close-up bears.")
+    parser.add_argument("--imgsz", type=int, default=1280,
+                        help="YOLO inference image size (default 1280, sweet spot for "
+                             "1080p video). Use 640 for speed, 1792/2048 for better "
+                             "recall on light/distant bears.")
 
     args = parser.parse_args()
 
