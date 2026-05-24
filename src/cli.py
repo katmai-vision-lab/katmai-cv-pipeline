@@ -42,6 +42,9 @@ readline.parse_and_bind("tab: complete")
 
 c = Console()
 
+class GoBack(Exception):
+    pass
+
 
 # ── Raw single-keypress ───────────────────────────────────────────────────────
 
@@ -78,9 +81,12 @@ def _key(prompt: str, valid: str, default: str = "") -> str:
         ch.upper() if ch == default else ch
         for ch in valid
     )
-    c.print(f"  [cyan]{prompt}[/cyan]  [dim]({opts})[/dim] : ", end="")
+    c.print(f"  [cyan]{prompt}[/cyan]  [dim]({opts} · b=back)[/dim] : ", end="")
     while True:
         ch = _getch().lower()
+        if ch == "b":
+            c.print("b")
+            raise GoBack
         if ch in valid.lower() or ch in ("\r", "\n"):
             result = default if ch in ("\r", "\n") else ch
             c.print(result)
@@ -99,6 +105,8 @@ def _ask(label: str, default: str = "", desc: str = "") -> str:
     hint = f" [dim]({disp})[/dim]" if default else ""
     note = f"  [dim]· {desc}[/dim]" if desc else ""
     val  = c.input(f"  [cyan]{label}[/cyan]{hint}{note} : ").strip()
+    if val.lower() == "b":
+        raise GoBack
     return val or default
 
 
@@ -109,6 +117,7 @@ def _header(title: str, sub: str = ""):
     if sub:
         body.append(f"\n{sub}", style="dim")
     c.print(Panel(body, border_style="cyan", padding=(0, 2)))
+    c.print("  [dim]b · back to main menu[/dim]")
 
 def _ok(msg):   c.print(f"\n[bold green]✓[/bold green]  {msg}")
 def _err(msg):  c.print(f"\n[bold red]✗[/bold red]  {msg}")
@@ -143,17 +152,60 @@ def _pick_video(directory: Path = TEST_DIR) -> Optional[str]:
         c.print(t)
         c.print()
 
-        valid = "".join(str(i) for i in range(1, len(videos) + 1)) + "p"
-        c.print(f"  [cyan]Pick[/cyan]  [dim]({'/'.join(valid)})[/dim] : ", end="")
+        valid = "".join(str(i) for i in range(1, len(videos) + 1)) + "pb"
+        c.print(f"  [cyan]Pick[/cyan]  [dim]({'/'.join(valid[:-1])} · b=back)[/dim] : ", end="")
         while True:
             ch = _getch().lower()
             if ch in valid:
                 c.print(ch)
+                if ch == "b":
+                    raise GoBack
                 if ch != "p":
                     return str(videos[int(ch) - 1])
                 break
 
     return _ask("Video path") or None
+
+
+def _pick_videos(directory: Path = TEST_DIR) -> Optional[list]:
+    """Multi-select video picker — returns list of path strings or None."""
+    videos: list[Path] = []
+    if directory.exists():
+        for ext in EXTS:
+            videos.extend(sorted(directory.glob(ext)))
+    videos = videos[:9]
+
+    if videos:
+        c.print("\n  [dim]Available videos:[/dim]")
+        t = Table(box=None, show_header=False, padding=(0, 1))
+        t.add_column(style="bold cyan", width=4, no_wrap=True)
+        t.add_column(style="white", max_width=60, no_wrap=True, overflow="ellipsis")
+        for i, v in enumerate(videos, 1):
+            t.add_row(str(i), v.name)
+        c.print(t)
+        c.print()
+        valid_nums = set(str(i) for i in range(1, len(videos) + 1))
+        raw = c.input(
+            f"  [cyan]Pick[/cyan]  [dim](e.g. 1 3  or  all  ·  b=back)[/dim] : "
+        ).strip()
+        if raw.lower() == "b":
+            raise GoBack
+        if raw.lower() == "all":
+            return [str(v) for v in videos]
+        tokens  = [t.strip() for t in raw.replace(",", " ").split() if t.strip()]
+        chosen  = [t for t in tokens if t in valid_nums]
+        ignored = [t for t in tokens if t not in valid_nums]
+        if ignored:
+            c.print(f"  [yellow]⚠[/yellow]  Ignored unrecognised entries: {', '.join(ignored)}")
+        if chosen:
+            return [str(videos[int(n) - 1]) for n in chosen]
+        return None
+
+    raw = c.input("  [cyan]Video paths[/cyan]  [dim](space-separated  ·  b=back)[/dim] : ").strip()
+    if raw.lower() == "b":
+        raise GoBack
+    paths = [p for p in raw.split() if p]
+    return paths if paths else None
 
 
 # ── Welcome & main menu ───────────────────────────────────────────────────────
@@ -170,24 +222,72 @@ def _menu() -> str:
     t.add_column(style="bold cyan", width=4)
     t.add_column(style="white", min_width=20)
     t.add_column(style="dim")
-    t.add_row("1", "Track bears",          "ByteTrack · annotated output video with bounding boxes")
-    t.add_row("2", "Count bears",          "per-video bear counts · optional unique-bear tracking")
-    t.add_row("3", "Detect feeding events","VLM frame analysis · timestamped behavior JSON")
-    t.add_row("4", "Count salmon jumps",   "CV-based jump detection · jump count + timestamps")
-    t.add_row("5", "Fetch environmental data", "RAWS · NADP · USGS · weather, precipitation, hydrology")
-    t.add_row("6", "Evaluate model",       "mAP · precision · recall · counting accuracy vs ground truth")
-    t.add_row("7", "Train model",          "fine-tune YOLOv8n on a new labeled dataset")
+    t.add_row("1", "Detect bears",         "raw YOLO inference · annotated output video with bear bounding boxes")
+    t.add_row("2", "Track bears",          "ByteTrack · annotated output video with bounding boxes")
+    t.add_row("3", "Batch count bears",     "fast frame-sampled counts across many videos · no output video")
+    t.add_row("4", "Detect feeding events","VLM frame analysis · timestamped behavior JSON")
+    t.add_row("5", "Count salmon jumps",   "CV-based jump detection · jump count + timestamps")
+    t.add_row("6", "Fetch environmental data", "RAWS · NADP · USGS · weather, precipitation, hydrology")
+    t.add_row("7", "Evaluate model",       "mAP · precision · recall · counting accuracy vs ground truth")
+    t.add_row("8", "Train model",          "fine-tune YOLOv8n on a new labeled dataset")
     t.add_row("q", "Quit", "")
     c.print(Panel(t, title="[bold]Main Menu[/bold]", border_style="cyan", padding=(0, 1)))
-    c.print(f"\n  [cyan]Select[/cyan]  [dim](1/2/3/4/5/6/7/q)[/dim] : ", end="")
+    c.print(f"\n  [cyan]Select[/cyan]  [dim](1/2/3/4/5/6/7/8/q)[/dim] : ", end="")
     while True:
-        ch = _getch()
-        if ch in "1234567q":
+        ch = _getch().lower()
+        if ch in "12345678q":
             c.print(ch)
             return ch
 
 
-# ── 1. Track ──────────────────────────────────────────────────────────────────
+# ── 1. Detect ─────────────────────────────────────────────────────────────────
+
+def detect_bears():
+    c.print(); _header("Detect Bears", "Raw YOLO inference  ·  saves annotated output video with bear bounding boxes")
+
+    video = _pick_video()
+    if not video: return _err("No video selected.")
+
+    model = _ask("Model weights", MODEL, "path to .pt weights file")
+    conf  = float(_ask("Confidence", "0.25", "min detection score to accept a box  (0–1)"))
+
+    c.print()
+    _config({"video": Path(video).name, "model": Path(model).name, "confidence": conf})
+
+    if not _confirm("Run?"):
+        return
+
+    _step("Loading model and running detection…")
+    try:
+        from src.detection.detector import BearDetector
+        det = BearDetector(model_path=model)
+        _, out_dir = det.predict_video(video_path=video, conf=conf)
+        out = next(iter(list(out_dir.glob("*.mp4")) + list(out_dir.glob("*.avi"))), out_dir)
+        meta_path = out_dir / "metadata.json"
+        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+        c.print()
+        t = Table(title="Detection Results", box=box.ROUNDED, border_style="cyan",
+                  show_header=False)
+        t.add_column(style="dim cyan", min_width=14)
+        t.add_column(style="white")
+        t.add_row("video",        Path(video).name)
+        t.add_row("model",        Path(model).name)
+        t.add_row("confidence",   str(conf))
+        if meta:
+            t.add_row("frames",       str(meta.get("total_frames", "?")))
+            t.add_row("detections",   str(meta.get("total_detections", "?")))
+            t.add_row("max/frame",    str(meta.get("max_per_frame", "?")))
+            t.add_row("avg/frame",    f"{meta.get('avg_detections_per_frame', 0):.2f}")
+        t.add_row("status",       "[green]✓ complete[/green]")
+        c.print(t)
+        _ok(f"Saved → predictions/{out_dir.name}")
+    except KeyboardInterrupt:
+        c.print("\n  [yellow]Cancelled.[/yellow]")
+    except Exception as e:
+        _err(str(e))
+
+
+# ── 2. Track ──────────────────────────────────────────────────────────────────
 
 def track_bears():
     c.print(); _header("Track Bears", "ByteTrack  ·  saves annotated output video")
@@ -198,11 +298,10 @@ def track_bears():
     model   = _ask("Model weights",  MODEL,    "path to .pt weights file")
     conf    = float(_ask("Confidence", "0.25", "min detection score to accept a box  (0–1)"))
     skip    = int(_ask("Frame skip",   "1",    "process every Nth frame  (1 = every frame, smoothest video)"))
-    tracker = _ask("Tracker",        "bytetrack", "bytetrack or botsort")
 
     c.print()
     _config({"video": Path(video).name, "model": Path(model).name,
-             "confidence": conf, "frame_skip": skip, "tracker": tracker})
+             "confidence": conf, "frame_skip": skip})
 
     if not _confirm("Run?"):
         return
@@ -212,24 +311,47 @@ def track_bears():
         from src.detection.detector import BearDetector
         det = BearDetector(model_path=model)
         _, out_dir = det.track_and_save_video(
-            video_path=video, conf=conf, frame_skip=skip, tracker=tracker)
+            video_path=video, conf=conf, frame_skip=skip, tracker="bytetrack")
         out = next(iter(list(out_dir.glob("*.mp4")) + list(out_dir.glob("*.avi"))), out_dir)
-        _ok(f"Saved → {out}")
+        is_mp4 = str(out).endswith(".mp4")
+        traj_path = out_dir / "trajectories.json"
+        traj = json.loads(traj_path.read_text()) if traj_path.exists() else {}
+        c.print()
+        t = Table(title="Tracking Results", box=box.ROUNDED, border_style="cyan",
+                  show_header=False)
+        t.add_column(style="dim cyan", min_width=14)
+        t.add_column(style="white")
+        t.add_row("video",         Path(video).name)
+        t.add_row("model",         Path(model).name)
+        t.add_row("confidence",    str(conf))
+        t.add_row("frame skip",    str(skip))
+        if traj:
+            t.add_row("frames",        str(traj.get("total_frames", "?")))
+            t.add_row("unique bears",  str(traj.get("unique_bears", "?")))
+            t.add_row("max/frame",     str(traj.get("max_per_frame", "?")))
+        t.add_row("format",        "MP4" if is_mp4 else "AVI (install ffmpeg for MP4)")
+        t.add_row("status",        "[green]✓ complete[/green]")
+        c.print(t)
+        _ok(f"Saved → predictions/{out_dir.name}")
     except KeyboardInterrupt:
         c.print("\n  [yellow]Cancelled.[/yellow]")
     except Exception as e:
         _err(str(e))
 
 
-# ── 2. Count ──────────────────────────────────────────────────────────────────
+# ── 3. Count ──────────────────────────────────────────────────────────────────
 
 def count_bears():
-    c.print(); _header("Count Bears", "Batch counting  ·  optional ByteTrack unique-bear estimates")
+    c.print(); _header("Batch Count Bears", "Fast frame-sampled counts across many videos  ·  no output video")
 
-    mode = _key("Input mode", "vd", "v")   # v = video, d = directory
+    c.print()
+    c.print("  [cyan]v[/cyan]  video files  [dim]· pick one or more specific videos[/dim]")
+    c.print("  [cyan]d[/cyan]  directory    [dim]· process all videos in a folder[/dim]")
+    mode = _key("Input mode", "vd", "v")
     if mode == "v":
-        video  = _pick_video()
-        vpaths = [video] if video else None
+        vpaths = _pick_videos()
+        if not vpaths:
+            return _err("No videos selected.")
         vdir, pat = None, "*.mp4"
     else:
         vdir   = _ask("Video directory", str(TEST_DIR), "folder containing video files")
@@ -268,6 +390,9 @@ def count_bears():
                 video_paths=vpaths, video_dir=vdir, pattern=pat,
                 conf=conf, frame_skip=skip, ground_truth=ground_truth)
             _show_count_results(res)
+        ok = res.get("successful", res.get("aggregate", {}).get("successful_videos", 0))
+        total = res.get("total", res.get("aggregate", {}).get("total_videos", 0))
+        _ok(f"{ok}/{total} video(s) processed")
     except KeyboardInterrupt:
         c.print("\n  [yellow]Cancelled.[/yellow]")
     except Exception as e:
@@ -314,7 +439,7 @@ def _show_count_results(res: dict):
                 f"time {agg.get('total_processing_time',0):.1f}s[/dim]")
 
 
-# ── 3. Detect feeding events ─────────────────────────────────────────────────
+# ── 4. Detect feeding events ─────────────────────────────────────────────────
 
 def detect_feeding():
     c.print(); _header("Detect Feeding Events",
@@ -350,7 +475,17 @@ def detect_feeding():
             conf=conf,
             backend=backend_name,
         )
-        _ok(f"Analysis saved → {json_path}")
+        c.print()
+        t = Table(title="Feeding Event Results", box=box.ROUNDED, border_style="cyan",
+                  show_header=False)
+        t.add_column(style="dim cyan", min_width=14)
+        t.add_column(style="white")
+        t.add_row("video",    Path(video).name)
+        t.add_row("backend",  backend_name)
+        t.add_row("interval", f"{interval}s")
+        t.add_row("status",   "[green]✓ complete[/green]")
+        c.print(t)
+        _ok(f"Saved → predictions/{Path(str(json_path)).parent.name}")
         c.print(f"\n  [dim]View with:[/dim]  python -m src.behavior.feeding_viewer "
                 f"--video \"{Path(video).name}\" --analysis \"{json_path}\"")
     except KeyboardInterrupt:
@@ -359,7 +494,7 @@ def detect_feeding():
         _err(str(e))
 
 
-# ── 4. Count salmon jumps ─────────────────────────────────────────────────────
+# ── 5. Count salmon jumps ─────────────────────────────────────────────────────
 
 def count_salmon_jumps():
     c.print(); _header("Count Salmon Jumps",
@@ -484,7 +619,7 @@ def count_salmon_jumps():
         c.print("\n  [yellow]Cancelled.[/yellow]")
     except Exception as e:
         _err(str(e))
-# ── 5. Fetch environmental data ───────────────────────────────────────────────
+# ── 6. Fetch environmental data ───────────────────────────────────────────────
 
 def fetch_environmental_data():
     c.print(); _header("Fetch Environmental Data",
@@ -617,7 +752,7 @@ def fetch_environmental_data():
         c.print(f"\n  [yellow]Some sources failed — check errors above.[/yellow]")
 
 
-# ── 6. Evaluate ───────────────────────────────────────────────────────────────
+# ── 7. Evaluate ───────────────────────────────────────────────────────────────
 
 def evaluate():
     c.print(); _header("Evaluate Model", "mAP · precision · recall · counting accuracy")
@@ -656,9 +791,21 @@ def evaluate():
                      "frame_skip": skip, "conf": conf})
             if not _confirm("Run?"): return
             _step("Evaluating counting accuracy…")
-            ev.evaluate_counting_accuracy(
+            df = ev.evaluate_counting_accuracy(
                 video_path=video, ground_truth_counts=gt,
                 frame_skip=skip, save_dir=out_dir)
+            accuracy = df['is_correct'].sum() / max(len(df), 1) * 100
+            mae      = df['absolute_error'].mean()
+            rmse     = (df['absolute_error'] ** 2).mean() ** 0.5
+            c.print()
+            t = Table(title="Counting Accuracy", box=box.ROUNDED, border_style="cyan")
+            t.add_column("Metric", style="cyan")
+            t.add_column("Value",  style="bold green", justify="right")
+            t.add_row("Frames evaluated", str(len(df)))
+            t.add_row("Exact match",      f"{accuracy:.2f}%")
+            t.add_row("MAE",              f"{mae:.3f} bears")
+            t.add_row("RMSE",             f"{rmse:.3f} bears")
+            c.print(t)
             _ok(f"Results saved → {out_dir}")
 
         else:  # simple
@@ -677,6 +824,19 @@ def evaluate():
             df.to_csv(out_dir / f"simple_eval_{stem}.csv", index=False)
             if plot:
                 plot_evaluation(df, out_dir / f"simple_eval_{stem}.png")
+            c.print()
+            t = Table(title="Evaluation Results", box=box.ROUNDED, border_style="cyan")
+            t.add_column("Metric", style="cyan")
+            t.add_column("Value",  style="bold green", justify="right")
+            t.add_row("Total frames",      str(len(df)))
+            t.add_row("Frames with bears", str((df['num_bears'] > 0).sum()))
+            t.add_row("Avg bears/frame",   f"{df['num_bears'].mean():.2f}")
+            t.add_row("Max bears/frame",   str(int(df['num_bears'].max())))
+            t.add_row("Avg confidence",    f"{df['avg_confidence'].mean():.2f}")
+            if gt_raw:
+                match = df['num_bears'].max() == int(gt_raw)
+                t.add_row("Ground truth match", "[green]✓[/green]" if match else "[red]✗[/red]")
+            c.print(t)
             _ok(f"Saved → {out_dir}")
 
     except KeyboardInterrupt:
@@ -697,7 +857,7 @@ def _show_metrics(m: dict):
     c.print(); c.print(t)
 
 
-# ── 4. Train ──────────────────────────────────────────────────────────────────
+# ── 8. Train ──────────────────────────────────────────────────────────────────
 
 def train():
     c.print(); _header("Train Model", "Fine-tune YOLOv8n on new labeled data")
@@ -738,13 +898,14 @@ def train():
 def main():
     _welcome()
     dispatch = {
-        "1": track_bears,
-        "2": count_bears,
-        "3": detect_feeding,
-        "4": count_salmon_jumps,
-        "5": fetch_environmental_data,
-        "6": evaluate,
-        "7": train,
+        "1": detect_bears,
+        "2": track_bears,
+        "3": count_bears,
+        "4": detect_feeding,
+        "5": count_salmon_jumps,
+        "6": fetch_environmental_data,
+        "7": evaluate,
+        "8": train,
     }
     while True:
         try:
@@ -753,7 +914,12 @@ def main():
             break
         if ch == "q":
             break
-        dispatch[ch]()
+        try:
+            dispatch[ch]()
+        except GoBack:
+            pass
+        except (KeyboardInterrupt, EOFError):
+            break
     c.print("\n[dim]Goodbye.[/dim]\n")
 
 
