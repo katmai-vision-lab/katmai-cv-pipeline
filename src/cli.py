@@ -295,13 +295,14 @@ def track_bears():
     video   = _pick_video()
     if not video: return _err("No video selected.")
 
-    model   = _ask("Model weights",  MODEL,    "path to .pt weights file")
-    conf    = float(_ask("Confidence", "0.25", "min detection score to accept a box  (0–1)"))
-    skip    = int(_ask("Frame skip",   "1",    "process every Nth frame  (1 = every frame, smoothest video)"))
+    model  = _ask("Model weights",  MODEL,    "path to .pt weights file")
+    conf   = float(_ask("Confidence", "0.25", "min detection score to accept a box  (0–1)"))
+    skip   = int(_ask("Frame skip",   "1",    "process every Nth frame  (1 = every frame, smoothest video)"))
+    imgsz  = int(_ask("Image size",   "1280", "resize frames before inference  (640 = faster, 1280 = more accurate)"))
 
     c.print()
     _config({"video": Path(video).name, "model": Path(model).name,
-             "confidence": conf, "frame_skip": skip})
+             "confidence": conf, "frame_skip": skip, "imgsz": imgsz})
 
     if not _confirm("Run?"):
         return
@@ -311,7 +312,7 @@ def track_bears():
         from src.detection.detector import BearDetector
         det = BearDetector(model_path=model)
         _, out_dir = det.track_and_save_video(
-            video_path=video, conf=conf, frame_skip=skip, tracker="bytetrack")
+            video_path=video, conf=conf, frame_skip=skip, imgsz=imgsz, tracker="bytetrack")
         out = next(iter(list(out_dir.glob("*.mp4")) + list(out_dir.glob("*.avi"))), out_dir)
         is_mp4 = str(out).endswith(".mp4")
         traj_path = out_dir / "trajectories.json"
@@ -325,6 +326,7 @@ def track_bears():
         t.add_row("model",         Path(model).name)
         t.add_row("confidence",    str(conf))
         t.add_row("frame skip",    str(skip))
+        t.add_row("imgsz",         str(imgsz))
         if traj:
             t.add_row("frames",        str(traj.get("total_frames", "?")))
             t.add_row("unique bears",  str(traj.get("unique_bears", "?")))
