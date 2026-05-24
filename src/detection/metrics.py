@@ -120,13 +120,7 @@ class VideoEvaluator:
     def evaluate_counting_accuracy(self, video_path, ground_truth_counts, 
                                    frame_skip=1, save_dir=None):
         """Evaluate bear counting accuracy"""
-        print(f"\n{'='*70}")
-        print("COUNTING ACCURACY EVALUATION")
-        print(f"{'='*70}\n")
-        
         is_constant = isinstance(ground_truth_counts, int)
-        if is_constant:
-            print(f"Ground Truth: {ground_truth_counts} bears (constant)")
         
         results = self.detector.model.predict(source=str(video_path), 
                                              conf=self.conf_threshold,
@@ -157,21 +151,13 @@ class VideoEvaluator:
         mae = df['absolute_error'].mean()
         rmse = np.sqrt((df['absolute_error'] ** 2).mean())
         
-        print(f"Frames: {len(df)}")
-        print(f"\nCounting Accuracy:")
-        print(f"  Exact Match:  {accuracy:.2f}%")
-        print(f"  MAE:          {mae:.3f} bears")
-        print(f"  RMSE:         {rmse:.3f} bears")
-        
         if save_dir:
             Path(save_dir).mkdir(parents=True, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             csv_path = Path(save_dir) / f"counting_{ts}.csv"
             df.to_csv(csv_path, index=False)
             self._plot_counting(df, Path(save_dir), ts)
-            print(f"\n✓ Results saved: {csv_path}")
-        
-        print(f"{'='*70}\n")
+
         return df
     
     def _plot_counting(self, df, save_dir, timestamp):

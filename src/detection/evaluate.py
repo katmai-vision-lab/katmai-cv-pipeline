@@ -39,10 +39,6 @@ def evaluate_video(detector, video_path, ground_truth_count=None, conf=0.25):
     Returns:
         DataFrame with per-frame statistics
     """
-    print(f"\n{'='*60}")
-    print(f"Evaluating on: {Path(video_path).name}")
-    print(f"{'='*60}\n")
-
     video_path = Path(video_path)
     if not video_path.is_absolute():
         video_path = RAW_DATA_DIR / video_path
@@ -73,22 +69,6 @@ def evaluate_video(detector, video_path, ground_truth_count=None, conf=0.25):
         })
     
     df = pd.DataFrame(detections_per_frame)
-    
-    # Print statistics
-    print(f"Statistics:")
-    print(f"  Total frames: {len(df)}")
-    print(f"  Frames with bears: {(df['num_bears'] > 0).sum()}")
-    print(f"  Avg bears/frame: {df['num_bears'].mean():.2f}")
-    print(f"  Max bears in frame: {df['num_bears'].max()}")
-    print(f"  Avg confidence: {df['avg_confidence'].mean():.2f}")
-    
-    if ground_truth_count:
-        print(f"\nGround Truth Comparison:")
-        print(f"  Ground truth: {ground_truth_count} bears")
-        print(f"  Max detected: {df['num_bears'].max()} bears")
-        accuracy = "✓ Correct" if df['num_bears'].max() == ground_truth_count else "✗ Incorrect"
-        print(f"  Status: {accuracy}")
-    
     return df
 
 

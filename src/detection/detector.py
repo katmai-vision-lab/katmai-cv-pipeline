@@ -108,24 +108,29 @@ class BearDetector:
 
         return results
 
-    def predict_video(self, video_path, output_name=None, conf=0.25, 
-                      classes=None, save=True, **kwargs):
+    @staticmethod
+    def canonical_detection_cache(video_path):
+        """Stable cache path for a video: predictions/<stem>/detection_cache.json."""
+        return Path(PREDICTIONS_DIR) / Path(video_path).stem / "detection_cache.json"
+
+    def predict_video(self, video_path, output_name=None, conf=0.25,
+                      classes=None, save=True, use_cache=True, **kwargs):
         """
         Run detection on video
-        
+
         Args:
             video_path: Path to video file or filename in RAW_DATA_DIR
             output_name: Output directory name
             conf: Confidence threshold
             classes: List of class IDs to detect (None = all classes)
             save: Save annotated video
+            use_cache: Return cached output if model/conf unchanged (default True)
             **kwargs: Additional YOLO prediction parameters
-        
+
         Returns:
             results: YOLO results object
             output_dir: Path to output directory
         """
-        # Handle video path
         video_path = Path(video_path)
         if not video_path.is_absolute():
             video_path = RAW_DATA_DIR / video_path
@@ -133,21 +138,30 @@ class BearDetector:
         if not video_path.exists():
             raise FileNotFoundError(f"Video not found: {video_path}")
 
-        # Generate output name
+        # Stable output dir used for caching (avoids timestamp-churn on repeat runs)
+        stable_name = f"{video_path.stem}_detect"
+        cache_path  = self.canonical_detection_cache(video_path)
+
+        if use_cache and cache_path.exists():
+            with open(cache_path) as _f:
+                _c = json.load(_f)
+            cached_dir = Path(_c.get("output_dir", ""))
+            cached_video = next(
+                iter(list(cached_dir.glob("*.mp4")) + list(cached_dir.glob("*.avi"))), None
+            ) if cached_dir.exists() else None
+            if (
+                _c.get("model") == self.model_path.name
+                and _c.get("conf")  == conf
+                and cached_video is not None
+            ):
+                print(f"   Detection cache hit → {cache_path.parent.name}", flush=True)
+                return None, cached_dir
+
         if output_name is None:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            output_name = f"{timestamp}_{video_path.stem}"
+            output_name = stable_name
 
-        print(f"\n{'='*60}")
-        print(f"Bear Detection")
-        print(f"{'='*60}")
-        print(f"Video: {video_path.name}")
-        print(f"Model: {self.model_path.name}")
-        print(f"Confidence: {conf}")
-        print(f"Output: {PREDICTIONS_DIR / output_name}")
-        print(f"{'='*60}\n")
+        print(f"   Detecting bears: {video_path.name}", flush=True)
 
-        # Run prediction with streaming to avoid memory overload
         results = self.model.predict(
             source=str(video_path),
             conf=conf,
@@ -158,17 +172,19 @@ class BearDetector:
             project=str(PREDICTIONS_DIR),
             name=output_name,
             exist_ok=True,
-            stream=True,  
+            stream=True,
             **kwargs
         )
 
         output_dir = PREDICTIONS_DIR / output_name
-
-        # Save metadata 
         self._save_prediction_metadata(video_path, output_dir, conf, results)
 
-        print(f"\n✓ Detection complete!")
-        print(f"Results: {output_dir}")
+        if use_cache:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(cache_path, "w") as _f:
+                json.dump({"model": self.model_path.name, "conf": conf,
+                           "output_dir": str(output_dir)}, _f)
+            print(f"   Detection cache saved → {cache_path.parent.name}", flush=True)
 
         return None, output_dir
 
@@ -809,11 +825,36 @@ class BearDetector:
         if not video_path.exists():
             raise FileNotFoundError(f"Video not found: {video_path}")
 
+        # Stable cache for the saved output video (conf + frame_skip keyed)
+        _save_cache_path = (
+            Path(PREDICTIONS_DIR) / video_path.stem / "track_save_cache.json"
+        )
         if output_name is None:
-            output_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{video_path.stem}_track"
+            if _save_cache_path.exists():
+                with open(_save_cache_path) as _f:
+                    _sc = json.load(_f)
+                _cached_dir = Path(_sc.get("output_dir", ""))
+                _cached_video = next(
+                    iter(list(_cached_dir.glob("*.mp4")) + list(_cached_dir.glob("*.avi"))), None
+                ) if _cached_dir.exists() else None
+                if (
+                    _sc.get("model")      == self.model_path.name
+                    and _sc.get("conf")       == conf
+                    and _sc.get("frame_skip") == frame_skip
+                    and _cached_video is not None
+                ):
+                    print(f"   Tracking save cache hit → {_save_cache_path.parent.name}", flush=True)
+                    return None, _cached_dir
+
+            output_name = f"{video_path.stem}_track"
 
         print(f"\n📹 Tracking & saving video: {video_path.name}")
         print(f"   Output: {PREDICTIONS_DIR / output_name}\n")
+
+        _cap = cv2.VideoCapture(str(video_path))
+        _total_frames = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        _cap.release()
+        _processed = _total_frames // frame_skip if frame_skip > 1 else _total_frames
 
         # --- Pass 1: stream to collect tracking data (no video writing) ---
         results_stream = self.model.track(
@@ -832,7 +873,12 @@ class BearDetector:
         frame_data = []   # for _merge_fragmented_tracks
         frame_boxes = []  # [{raw_track_id: (x1, y1, x2, y2, conf)}, ...]
 
+        print(f"   Pass 1/2: tracking {_processed} frames …", flush=True)
         for result in results_stream:
+            _n = len(frame_data)
+            if _n > 0 and _n % 100 == 0:
+                _pct = min(100, int(_n / max(_processed, 1) * 100))
+                print(f"   Pass 1/2: {_pct}%  (frame {_n}/{_processed})", flush=True)
             boxes = result.boxes
             track_ids = []
             track_positions = {}
@@ -867,6 +913,7 @@ class BearDetector:
                 'track_boxes': track_boxes,
             })
             frame_boxes.append(box_data)
+        print(f"   Pass 1/2: done ({len(frame_data)} frames)", flush=True)
 
         # --- Pre-merge filter: drop raw tracks that, on their own, are shorter
         # than min_raw_duration. This prevents brief detections from being used
@@ -976,6 +1023,8 @@ class BearDetector:
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
         writer = cv2.VideoWriter(str(avi_path), fourcc, out_fps, (width, height))
 
+        _total_pass2 = len(frame_boxes)
+        print(f"   Pass 2/2: rendering {_total_pass2} frames …", flush=True)
         processed = 0
         src_frame = 0
         while cap.isOpened():
@@ -998,8 +1047,12 @@ class BearDetector:
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
                 writer.write(img)
                 processed += 1
+                if processed > 0 and processed % 100 == 0:
+                    _pct = min(100, int(processed / max(_total_pass2, 1) * 100))
+                    print(f"   Pass 2/2: {_pct}%  (frame {processed}/{_total_pass2})", flush=True)
             src_frame += 1
 
+        print(f"   Pass 2/2: done ({processed} frames)", flush=True)
         cap.release()
         writer.release()
 
@@ -1030,9 +1083,15 @@ class BearDetector:
                     'raw_id': raw_id,
                 })
 
+        _max_per_frame = max(
+            (sum(1 for raw_id in fb if raw_id in id_map) for fb in frame_boxes),
+            default=0
+        )
         trajectory_payload = {
             'video': video_path.name,
             'total_frames': len(frame_boxes),
+            'unique_bears': len(bear_trajectories),
+            'max_per_frame': _max_per_frame,
             'fps': src_fps,
             'bears': {
                 f'bear_{disp}': {
@@ -1135,17 +1194,22 @@ class BearDetector:
         out_video = avi_path
         mp4_path = avi_path.with_suffix(".mp4")
         try:
+            print("   Converting AVI → MP4 …", flush=True)
             subprocess.run(
                 ["ffmpeg", "-y", "-i", str(avi_path), "-c:v", "libx264", "-c:a", "aac", str(mp4_path)],
                 check=True, capture_output=True
             )
             avi_path.unlink()
             out_video = mp4_path
-            print(f"\n✓ Tracked video saved (MP4): {out_video}")
+            print(f"   Conversion done → {mp4_path.name}", flush=True)
         except (subprocess.CalledProcessError, FileNotFoundError):
-            print(f"\n✓ Tracked video saved (AVI): {out_video}")
-            if not mp4_path.exists():
-                print("  (Install ffmpeg to get MP4 for browser playback)")
+            pass
+
+        _save_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(_save_cache_path, "w") as _f:
+            json.dump({"model": self.model_path.name, "conf": conf,
+                       "frame_skip": frame_skip, "output_dir": str(output_dir)}, _f)
+        print(f"   Track save cache saved → {_save_cache_path.parent.name}", flush=True)
 
         return None, output_dir
 
@@ -1188,9 +1252,7 @@ class BearDetector:
             if not video_paths:
                 raise ValueError(f"No videos found in {video_dir} matching '{pattern}'")
         
-        print(f"\n{'='*70}")
-        print(f"BATCH BEAR TRACKING: {len(video_paths)} videos with {tracker}")
-        print(f"{'='*70}\n")
+        print(f"   Processing {len(video_paths)} video(s) …", flush=True)
 
         # Process each video with tracking
         results = []
@@ -1214,11 +1276,7 @@ class BearDetector:
                     'status': 'failed'
                 })
         
-        # Print summary
         successful = [r for r in results if 'error' not in r]
-        print(f"\n{'='*70}")
-        print(f"SUMMARY: Processed {len(successful)}/{len(video_paths)} videos successfully")
-        print(f"{'='*70}")
 
         batch_results = {
             'videos': results,
@@ -1290,9 +1348,7 @@ class BearDetector:
             if not video_paths:
                 raise ValueError(f"No videos found in {video_dir} matching '{pattern}'")
         
-        print(f"\n{'='*70}")
-        print(f"BATCH BEAR COUNTING: {len(video_paths)} videos")
-        print(f"{'='*70}")
+        print(f"   Processing {len(video_paths)} video(s) …", flush=True)
 
         # Process each video
         results = {
@@ -1343,9 +1399,6 @@ class BearDetector:
         # Save results if requested
         if save_results:
             self._save_batch_results(results)
-        
-        # Print summary
-        self._print_batch_summary(results)
         
         return results
 
@@ -1448,11 +1501,15 @@ class BearDetector:
         total_frames = 0
         total_detections = 0
         
+        max_per_frame = 0
         for result in results:
             total_frames += 1
             boxes = result.boxes
             if boxes is not None:
-                total_detections += len(boxes)
+                n = len(boxes)
+                total_detections += n
+                if n > max_per_frame:
+                    max_per_frame = n
 
         metadata = {
             'timestamp': datetime.now().isoformat(),
@@ -1461,6 +1518,7 @@ class BearDetector:
             'confidence_threshold': conf,
             'total_frames': total_frames,
             'total_detections': total_detections,
+            'max_per_frame': max_per_frame,
             'avg_detections_per_frame': total_detections / total_frames if total_frames > 0 else 0
         }
 
