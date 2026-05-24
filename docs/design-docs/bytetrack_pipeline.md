@@ -302,24 +302,7 @@ Overlays each bear's history of centroids as a colored polyline. Parameters:
 
 ### 7.3 Full Pipeline Commands
 
-```bash
-# Recommended workflow (three steps)
-python -m src.detection.track_analyze \
-  --video "bears/0507.mov" \
-  --model models/trained/bear_detector3/weights/best.pt \
-  --conf 0.7 --imgsz 1792 --classes 0
-# → trajectories.json + merge_report.json, ~2–4 min
-
-python -m src.detection.bbox_video \
-  --trajectories "predictions/<run>/trajectories.json"
-# → bbox_video.mp4, no YOLO inference needed
-
-python -m src.detection.trajectory_video \
-  --trajectories "predictions/<run>/trajectories.json"
-# → trajectories_overlay.mp4, no YOLO inference needed
-```
-
-Or do everything in one command:
+**Main command — one shot, does everything (YOLO + ByteTrack + merge + bbox video + trajectory video):**
 
 ```bash
 python -m src.detection.track_video \
@@ -327,6 +310,33 @@ python -m src.detection.track_video \
   --model models/trained/bear_detector3/weights/best.pt \
   --conf 0.7 --imgsz 1792 --classes 0
 ```
+
+Produces in `predictions/<run>_track/`:
+
+- `<video>.mp4` — bbox-overlay video
+- `trajectories.json`, `merge_report.json`
+- `trajectories_overlay.mp4` — historical trails video (unless `--no-trails`)
+
+**Re-render trail video only (fast, no YOLO):**
+
+```bash
+python -m src.detection.trajectory_video \
+  --trajectories "predictions/<run>/trajectories.json"
+```
+
+Use this to iterate on trail rendering parameters (`--anchor`, `--smooth-frames`, `--fade`, etc.) without re-running detection.
+
+**Debug — see all raw track IDs (no video, fastest):**
+
+```bash
+python -m src.detection.track_dump \
+  --video "bears/0507.mov" \
+  --model models/trained/bear_detector3/weights/best.pt \
+  --conf 0.5 --imgsz 1792 --classes 0 \
+  --json-out /tmp/dump.json
+```
+
+Prints per-frame raw IDs + merge analysis to stdout / JSON. Use when investigating "why was bear X not detected" or "how does conf / imgsz change recall".
 
 ---
 
@@ -364,9 +374,9 @@ Notes from debugging:
 ## Appendix: Related Files
 
 - Detector core: `src/detection/detector.py`
-- Main entry points: `src/detection/track_video.py`, `src/detection/track_analyze.py`
-- Visualization: `src/detection/trajectory_video.py`, `src/detection/bbox_video.py`
-- Debugging: `src/detection/track_dump.py`
+- Main entry point: `src/detection/track_video.py` — full pipeline (YOLO + ByteTrack + merge + bbox video + trail video)
+- Trail rendering: `src/detection/trajectory_video.py` — re-renders trail video from an existing `trajectories.json` (no YOLO)
+- Debugging: `src/detection/track_dump.py` — fastest tool for inspecting raw tracks and merge decisions, no video output
 - ByteTrack config: `configs/trackers/bytetrack.yaml`
 - ByteTrack paper summary: `docs/design-docs/tracking.md`
 - Model fine-tuning: `docs/design-docs/MODEL_FINE_TUNING_EN.md`
