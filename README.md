@@ -1,26 +1,39 @@
-# Computer Vision Pipeline to Detect, Track & Quantify Feeding Habits of Katmai NPP Alaskan Brown Bears
+# Katmai CV Pipeline — Bear Detection, Tracking & Feeding Behavior Analysis
 
-This project focuses on building an open-source, Python-based computer vision pipeline that analyzes video data from Katmai National Park & Preserve. The system is designed to automatically detect and track individual Alaskan brown bears, count salmon attempting to jump Brooks Falls, and quantify feeding behavior over time. In addition to visual analysis, the pipeline will integrate environmental context such as water level, stream flow, weather, and time of day to support deeper ecological insight.
+Open-source Python computer vision pipeline for detecting, tracking, and quantifying the feeding behavior of Alaskan brown bears at Katmai National Park & Preserve. Built as a UW ENGINE capstone project (2025–2026).
 
-Video data is sourced primarily from Explore.org bear cams in the Brooks Falls and Brooks River region.
+The system automatically detects and tracks bears, counts salmon jumping Brooks Falls, classifies feeding events using vision-language models, and integrates environmental context (river flow, weather, precipitation) for ecological analysis. Video data is sourced from Explore.org bear cams in the Brooks Falls and Brooks River region.
+
+**Deepwiki:** https://deepwiki.com/katmai-vision-lab/katmai-cv-pipeline  
+**Full documentation:** [`docs/`](docs/README.md)
 
 ## Scope
-The system is designed to run on a consumer-grade laptop or desktop and ingest short-form video clips (1–15 minutes). From these inputs, it will produce structured outputs including individual and total bear counts, bear movement trajectories, salmon jump counts, and feeding behavior metrics. These results will be paired with environmental data to enable analysis across time, conditions, and location.
 
-More information: https://github.com/katmai-vision-lab
+Runs on consumer-grade hardware and ingests short video clips (1–15 minutes). Outputs include bear counts, movement trajectories, salmon jump counts, feeding event timestamps, and environmental summaries paired with video timestamps.
 
-## Auto-Annotation with Multi-Model Consensus
+## Performance
 
-The pipeline includes an advanced multi-model annotation system that combines **Grounding DINO**, **DETR**, and **MegaDetector v5** to automatically generate high-quality training labels.
+| Component | Metric | Value |
+|---|---|---|
+| Bear detector (fine-tuned YOLOv8n) | mAP@0.5 | 95.1% |
+| Bear detector | Precision / Recall / F1 | 92.2% / 90.6% / 91.4% |
+| Bear detector (pretrained, baseline) | mAP@0.5 | 17.9% |
+| Salmon annotation (stacking meta-learner) | Precision / Recall | 97.5% / 96.6% |
+| Bear annotation (multi-model consensus) | Precision / Recall | 89.3% / 99.8% |
 
-### System Requirements
+---
+
+## System Requirements
+
 - **GPU**: NVIDIA GPU with CUDA support (recommended 8GB+ VRAM)
 - **CUDA**: 12.x (tested with CUDA 12.8)
 - **Python**: 3.10
 - **RAM**: 16GB+ recommended
 - **Disk Space**: ~10GB for models and dependencies
 
-### Installation
+---
+
+## Installation
 
 **1. Create Python environment**
 ```bash
@@ -54,69 +67,315 @@ python -c "import transformers; print('transformers version:', transformers.__ve
 
 ### macOS / Windows installation notes
 
-The pipeline is developed and tested on **Linux + NVIDIA GPU**, but every
-module is written to be cross-platform — `src/config.get_device()`
-auto-detects CUDA / MPS / CPU at runtime and `torch.cuda.empty_cache()`
-calls are guarded against non-CUDA environments. Below are platform-
-specific notes for getting things running.
+The pipeline is developed and tested on **Linux + NVIDIA GPU**, but every module is written to be cross-platform — `src/config.get_device()` auto-detects CUDA / MPS / CPU at runtime and `torch.cuda.empty_cache()` calls are guarded against non-CUDA environments.
 
 #### macOS
 
 - **Apple Silicon (M1 / M2 / M3 / M4)** — supported via PyTorch MPS:
   ```bash
-  # Install CPU/MPS-only PyTorch (no CUDA on Mac)
   pip install torch torchvision
   ```
-  Auto-detected at runtime. Local Molmo2-8B runs on MPS at roughly the
-  speed of a mid-range NVIDIA card, but needs ~14 GB of unified memory
-  for FP16 (8 GB Macs should use the cloud VLM backends instead).
-- **Intel Mac** — CPU only. YOLOv8 + ByteTrack + pixel detector work
-  but slowly; recommend using cloud VLM backends (`--backend anthropic`
-  or `--backend gemini`) for behavior classification.
-- **FFmpeg** (needed by the `--render` flag of the pixel-eating
-  detector): `brew install ffmpeg`.
-- **`PytorchWildlife`** (MegaDetector) occasionally has dependency
-  conflicts on macOS. If `pip install PytorchWildlife` fails, install
-  it without dependencies and let the existing torch / torchvision
-  stack stay intact:
+  Auto-detected at runtime. Molmo2-8B runs on MPS at roughly the speed of a mid-range NVIDIA card, but needs ~14 GB of unified memory for FP16 (8 GB Macs should use cloud VLM backends instead).
+- **Intel Mac** — CPU only. YOLOv8 + ByteTrack + pixel detector work but slowly; recommend `--backend anthropic` or `--backend gemini` for behavior classification.
+- **FFmpeg** (needed by the `--render` flag of the pixel eating detector): `brew install ffmpeg`.
+- **`PytorchWildlife`** occasionally has dependency conflicts on macOS:
   ```bash
   pip install --no-deps PytorchWildlife
   ```
 
 #### Windows
 
-- **Recommended: WSL2 + Ubuntu 22.04**. Install WSL2, then `wsl --install -d Ubuntu-22.04`,
-  and follow the Linux installation steps inside the WSL shell. This
-  is the smoothest path on Windows and avoids most quoting / shell
-  differences in the example commands.
-- **Native Windows (PowerShell)** also works:
-  - Install PyTorch with CUDA from the same `--index-url`.
-  - Convert the multi-line `bash` commands in this README to single
-    lines or use PowerShell backtick (`` ` ``) continuations.
-  - Install FFmpeg from <https://www.gyan.dev/ffmpeg/builds/> and add
-    its `bin/` directory to `PATH`.
-- **No NVIDIA GPU on Windows**: the local Molmo2 backend will not fit;
-  use a cloud VLM backend (`--backend gemini` is cheapest) and the
-  rest of the pipeline runs on CPU.
+- **Recommended: WSL2 + Ubuntu 22.04**. Install WSL2 with `wsl --install -d Ubuntu-22.04` and follow the Linux steps inside the WSL shell.
+- **Native Windows (PowerShell)** also works — install PyTorch with CUDA from the same `--index-url`, convert multi-line commands to PowerShell backtick continuations, and install FFmpeg from <https://www.gyan.dev/ffmpeg/builds/>.
+- **No NVIDIA GPU**: use a cloud VLM backend (`--backend gemini` is cheapest); the rest of the pipeline runs on CPU.
 
 #### Device-selection summary
 
-Every CLI that runs a model exposes a `--device` flag. Passing nothing
-auto-detects: **CUDA → MPS → CPU**, in that order. Pass `--device cpu`
-to force CPU on a GPU machine for reproducibility, or `--device mps`
-on Apple Silicon if you want to be explicit.
+Every CLI that runs a model exposes a `--device` flag. Passing nothing auto-detects: **CUDA → MPS → CPU**. Pass `--device cpu` to force CPU.
 
-### Features
-- **Model Arena Evaluation**: Scientifically validated model weights based on 341 test images
-  - Grounding DINO: 0.406 weight (89.3% precision, 99.8% recall)
-  - MegaDetector v5: 0.335 weight (65.6% precision, 84.4% recall)
-  - DETR: 0.259 weight (35.4% precision, 74.7% recall)
-- **Weighted Consensus**: Uses model weights × confidence scores to select best detections
-- **Two Modes**: Human review mode or fully automatic mode for training data generation
+⚠️ **Version Compatibility**
+- Must use `transformers==4.47.1` (v5.x has breaking changes)
+- Do not upgrade transformers automatically
 
-### Usage
+---
 
-**Step 1: Extract frames from video**
+## Interactive TUI
+
+The primary entry point for running the full pipeline interactively:
+
+```bash
+python -m src.cli
+```
+
+The TUI presents a menu with tab-completion for file paths and step-by-step prompts for all parameters:
+
+| Key | Function | Description |
+|-----|----------|-------------|
+| 1 | Detect bears | Raw YOLO inference → annotated output video with bounding boxes |
+| 2 | Track bears | ByteTrack → annotated video with persistent bear IDs |
+| 3 | Batch count bears | Frame-sampled counts across many videos, no output video |
+| 4 | Detect feeding events | VLM frame analysis → timestamped behavior JSON |
+| 5 | Count salmon jumps | CV-based jump detection → count + timestamps |
+| 6 | Fetch environmental data | RAWS / NADP / USGS — weather, precipitation, hydrology |
+| 7 | Evaluate model | mAP, precision, recall, counting accuracy vs. ground truth |
+| 8 | Train model | Fine-tune YOLOv8n on a new labeled dataset |
+
+---
+
+## Bear Detection & Tracking
+
+### Run Pipeline (quick test with pretrained model)
+```bash
+python -m src.main \
+    --mode full \
+    --video "bears/2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
+    --skip-train \
+    --epochs 3 \
+    --conf 0.12 \
+    --ground-truth 5
+```
+
+### Train + predict + evaluate (full pipeline)
+```bash
+python -m src.main \
+    --mode full \
+    --video "bears/2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
+    --data data/annotation/bears/bear.yaml \
+    --epochs 3 \
+    --conf 0.25 \
+    --ground-truth 5
+```
+
+### Train model
+```bash
+python -m src.preprocessing.split_dataset \
+    --input data/annotation/bears
+
+python -m src.detection.train \
+    --data data/annotation/bears/bear.yaml \
+    --config configs/train_config.yaml
+```
+
+### Bear counting (batch)
+```bash
+python -m src.detection.bear_count \
+    --video-dir bears \
+    --model models/trained/bear_detector3/weights/best.pt \
+    --pattern "*.mp4" \
+    --classes 0 \
+    --conf 0.7 \
+    --tracking \
+    --frame-skip 1 \
+    --verbose
+```
+
+### ByteTrack annotated video
+```bash
+python -m src.detection.track_video \
+  --video "bears/0505.mp4" \
+  --model models/trained/bear_detector3/weights/best.pt \
+  --classes 0 \
+  --conf 0.7 \
+  --imgsz 1280 \
+  --frame-skip 1
+```
+
+### Trajectory overlay video
+
+Renders each bear's fading movement trail from a saved `trajectories.json`:
+```bash
+python -m src.detection.trajectory_video \
+    --trajectories "predictions/<run>/trajectories.json" \
+    --trail-frames 300 \
+    --thickness 3
+```
+
+### Track dump (debug)
+
+Dumps per-frame ByteTrack IDs to stdout or JSON without generating a video:
+```bash
+python -m src.detection.track_dump \
+    --video bears/xxx.mp4 \
+    --model models/trained/bear_detector3/weights/best.pt \
+    --classes 0 \
+    --conf 0.7 \
+    --json-out predictions/track_debug.json
+```
+
+---
+
+## Feeding Behavior Detection
+
+### VLM-based feeding analysis (recommended)
+
+Runs YOLO + ByteTrack, samples one frame every N seconds, and sends each frame to a vision model with per-bear position context. Produces timestamped behavior descriptions in JSON.
+
+**Step 1: Analyze**
+```bash
+python -m src.behavior.analyze_feeding \
+    --video path/to/video.mp4 \
+    --interval 0.5 \
+    --backend molmo2          # molmo2 | anthropic | gemini | openai
+```
+
+Available backends: `molmo2` (local, free), `anthropic` (Claude), `gemini` (cheapest cloud), `openai` (GPT-4o). Use `--vision-model` to override the default model per backend.
+
+**Step 2: Render viewer with closed-caption overlay**
+```bash
+python -m src.behavior.feeding_viewer \
+    --video path/to/video.mp4 \
+    --analysis predictions/<stem>_feeding_analysis/analysis.json
+```
+
+### Pixel-based eating detector (research artifact)
+
+A CPU-only detector (`src/behavior/pixel_eating_detector.py`) using HSV color analysis and posture heuristics was developed and tested. It does not work reliably on Brooks Falls footage — early-season salmon are silver-bodied and flesh is not visible inside the bear's bounding box. It is preserved for reference. See [`docs/04-technical-reference/pixel-eating-detection-research.md`](docs/04-technical-reference/pixel-eating-detection-research.md) for the full experiment report.
+
+### Bear identity augmentation
+
+Assigns cross-video bear identities using PoseSwin embeddings matched against a persistent gallery. Reads an existing `analysis.json` and writes `id_mapping.json`.
+
+```bash
+python -m src.identity.identify_bears \
+    --video path/to/video.mp4 \
+    --analysis predictions/<run>/analysis.json \
+    --gallery data/identity/bear_gallery.json
+```
+
+**Build a named gallery** from labeled head-crop folders (one folder per bear name):
+```bash
+python -m src.identity.build_named_gallery \
+    --image-root data/identity/gallery_images \
+    --output data/identity/named_bear_gallery.json
+```
+
+---
+
+## Salmon Jump Counting
+
+### CV-based jump counter (HSV + blob detection)
+
+```bash
+# Load saved config
+python -m src.detection.salmons.salmon_jump_counter_cv \
+    data/raw/salmons/salmon_jump_9.mov \
+    --config configs/salmon/config.json
+
+# Override ROI for a new video
+python -m src.detection.salmons.salmon_jump_counter_cv \
+    video2.mov --config config.json --roi 100 200 400 300
+
+# Tune blob sizes and gap without editing any file
+python -m src.detection.salmons.salmon_jump_counter_cv \
+    video.mov --min-blob-area 600 --max-blob-area 5000 --min-jump-gap-sec 1.0
+
+# Try new HSV values on a different video
+python -m src.detection.salmons.salmon_jump_counter_cv \
+    ocean_video.mov --salmon-hsv-lower 5 40 60 --salmon-hsv-upper 25 255 255
+
+# Save a new config once happy with parameters
+python -m src.detection.salmons.salmon_jump_counter_cv \
+    video.mov --roi 0 400 1280 300 --min-blob-area 500 --save-config river_config.json
+```
+
+### Visualization
+```bash
+# Simplest — ROI from embedded config in result.json
+python -m src.detection.salmons.visualize_salmon_jumps video.mov result.json
+
+# Custom output path
+python -m src.detection.salmons.visualize_salmon_jumps \
+    video.mov result.json --output review/jump9_annotated.mp4
+```
+
+Debug frames are saved as 2×2 grids:
+```
+┌─────────────────────┬─────────────────────┐
+│  annotated original │   fg mask (motion)  │
+│  ROI dim + cyan box │   white = movement  │
+├─────────────────────┼─────────────────────┤
+│   colour mask       │  combined mask      │
+│   white = salmon    │  fg AND colour      │
+└─────────────────────┴─────────────────────┘
+│frame 00438 | 7.30s / 15.4s | blobs: 2 | min_area=800 max_area=8000│
+```
+
+### Background subtraction counter (interactive)
+```bash
+# Interactive setup (recommended first run)
+python -m src.detection.salmons.salmon_jump_counter_bg \
+    --video data/raw/salmons/salmon_jump_9.mov
+
+# Re-run with saved parameters (headless)
+python -m src.detection.salmons.salmon_jump_counter_bg \
+    --video data/raw/salmons/salmon_jump_9.mov \
+    --roi 434,720,710,1062 \
+    --line-y 850 \
+    --var-threshold 40 \
+    --min-area 300 \
+    --output data/raw/salmons/salmon_jump_9_result.mp4
+```
+
+### Parameters reference
+![Salmon parameters](/docs/images/salmon-params.png)
+
+### Count salmon jumps via behavior module (VLM-based)
+```bash
+python -m src.behavior.count_salmon_jumps \
+    --video path/to/video.mp4
+```
+
+---
+
+## Environmental Data
+
+All modules fetch public APIs — no API keys required.
+
+### USGS Hydrological Data (water level, stream flow, water temperature)
+
+Uses the nearest USGS gauge on the Brooks River drainage (Kvichak River at Igiugig, site 15300500):
+```bash
+python -m src.environment.usgs_hydro --date 2023-07-15
+python -m src.environment.usgs_hydro --date 2023-07-15 --format csv
+python -m src.environment.usgs_hydro --date 2023-07-15 --output my_data.json
+python -m src.environment.usgs_hydro --start 2023-07-01 --end 2023-07-31
+```
+
+### RAWS Weather (wind, temperature, humidity, precipitation)
+
+Uses NPS RAWS stations near Brooks Falls (Three Forks ~22 km, Coville ~46 km, Pfaff Mine ~71 km):
+```bash
+python -m src.environment.raws_weather --date 2023-07-15
+python -m src.environment.raws_weather --date 2023-07-15 --station ATHF
+python -m src.environment.raws_weather --date 2023-07-15 --all-stations
+python -m src.environment.raws_weather --date 2023-07-15 --output my_data.json
+```
+
+### NADP Precipitation (daily totals)
+
+Uses NADP NTN station AK97 (nearest Brooks Falls station):
+```bash
+python -m src.environment.nadp_precip --date 2023-07-15
+python -m src.environment.nadp_precip --date 2023-07-15 --output my_data.csv --format csv
+python -m src.environment.nadp_precip --start 2023-07-01 --end 2023-07-31
+```
+
+### Video context resolution
+
+Resolves the datetime and GPS location of a video before making environmental API calls. Camera recordings extract metadata automatically; screen recordings prompt the user:
+```bash
+python -m src.environment.video_context --video path/to/video.mp4
+```
+
+---
+
+## Auto-Annotation with Multi-Model Consensus
+
+### Bear annotation
+
+Combines **Grounding DINO**, **DETR**, and **MegaDetector v5** to generate training labels.
+
+**Extract frames**
 ```bash
 python -m src.preprocessing.annotation_bear.frame_extractor \
   --input path/to/video.mp4 \
@@ -124,9 +383,8 @@ python -m src.preprocessing.annotation_bear.frame_extractor \
   --fps 0.2
 ```
 
-**Step 2: Generate training labels (auto-approve mode)**
+**Generate labels (auto-approve)**
 ```bash
-# Fully automatic - only saves detections with model consensus (≥2/3 models agree)
 python -m src.preprocessing.annotation_bear.multi_model_annotator \
   --input data/frames/video_name/ \
   --output data/auto_labels/ \
@@ -136,18 +394,7 @@ python -m src.preprocessing.annotation_bear.multi_model_annotator \
   --auto-approve
 ```
 
-**Alternative: Human review mode**
-```bash
-# Saves uncertain cases to review queue for manual verification
-python -m src.preprocessing.annotation_bear.multi_model_annotator \
-  --input data/frames/video_name/ \
-  --output data/consensus_labels/ \
-  --review-queue data/review_queue/ \
-  --prompt "bear" \
-  --min-agreement 2
-```
-
-**Step 3: Visualize results (optional)**
+**Visualize results**
 ```bash
 python -m src.preprocessing.annotation_bear.visualize_labels \
   --images data/frames/video_name/subfolder/ \
@@ -156,153 +403,47 @@ python -m src.preprocessing.annotation_bear.visualize_labels \
   --limit 10
 ```
 
-### Output Format
-- YOLO format labels (ready for training)
-- One `.txt` file per image with format: `class_id x_center y_center width height`
-- Only includes detections with consensus (weighted agreement ≥ min_agreement)
-
-### Advanced: Probability Calibration (Recommended)
-
-For improved accuracy, you can train probability calibrators that transform raw confidence scores into calibrated probabilities. This addresses the fact that different models have different confidence distributions (e.g., a 0.9 from DETR doesn't mean the same as 0.9 from Grounding DINO).
-
-**Benefits of calibration:**
-- More accurate combining of multi-model predictions
-- Better confidence estimates for each detection
-- Scientifically grounded probability scores
-- Reference: [sklearn probability calibration](https://scikit-learn.org/stable/modules/calibration.html)
-
-**Step 1: Train calibrators on validation set**
+**Probability calibration (optional, recommended)**
 ```bash
+# Train calibrators
 python -m src.preprocessing.annotation_bear.train_calibration \
   --images data/annotation/bears/images/ \
   --labels data/annotation/bears/labels/ \
   --output models/calibrators.pkl \
   --prompt "bear" \
   --iou-threshold 0.5
-```
 
-This will:
-- Run all 3 models on your validation images
-- Match detections to ground truth using IoU
-- Train isotonic regression calibrators
-- Report Expected Calibration Error (ECE) before/after
-
-**Step 2: Use calibrators during annotation**
-```bash
+# Use during annotation
 python -m src.preprocessing.annotation_bear.multi_model_annotator \
-  --input data/frames/video_name/ \
-  --output data/auto_labels/ \
-  --review-queue data/review_queue/ \
-  --prompt "bear" \
-  --min-agreement 2 \
-  --auto-approve \
-  --calibrator models/calibrators.pkl  # Add this line
+  ... \
+  --calibrator models/calibrators.pkl
 ```
 
-**What happens:**
-- Raw confidence scores are transformed into calibrated probabilities
-- Model weights are applied to calibrated probabilities
-- Results in more accurate consensus detection selection
-
-**Note**: Training calibrators requires:
-- A validation set with ground truth labels (YOLO format)
-- At least 100+ samples per model (more is better)
-- ~30-60 minutes on GPU depending on dataset size
-
-### Important Notes
-
-⚠️ **Version Compatibility**
-- Must use `transformers==4.47.1` (v5.x has breaking changes)
-- `huggingface_hub` must be compatible with transformers 4.47.1
-- Do not upgrade transformers automatically
-
-⚠️ **First Run**
-- Models will be downloaded automatically (~5GB total)
-- Downloads cached in `~/.cache/huggingface/`
-- First run may take 10-15 minutes for model downloads
-
-⚠️ **Memory Management**
-- Models load sequentially to avoid GPU OOM
-- Expect ~6-8GB GPU memory usage
-- CPU mode available but slow (add `--device cpu`)
-
-⚠️ **File Paths**
-- Frame extractor creates subdirectory structure
-- Visualize tool requires the actual image subdirectory path
-- Example: `data/frames/video_name/video_name_frames/` not `data/frames/video_name/`
-
-### Troubleshooting
-
-**Issue: ModuleNotFoundError for timm/omegaconf/PytorchWildlife**
-```bash
-pip install timm omegaconf pytorch-lightning lightning PytorchWildlife
-```
-
-**Issue: CUDA out of memory**
-- Reduce batch processing (models run sequentially by default)
-- Close other GPU applications
-- Use smaller model with `--use-detr False --use-megadet False`
-
-**Issue: transformers version conflict**
-```bash
-pip install transformers==4.47.1 --force-reinstall
-```
-
-**Issue: No detections generated**
-- Check `--min-agreement` value (default: 2)
-- Try lowering threshold: `--min-agreement 1`
-- Verify input frames exist with correct path
+**Model Arena weights (341 test images)**:
+- Grounding DINO: 0.406 weight (89.3% precision, 99.8% recall)
+- MegaDetector v5: 0.335 weight (65.6% precision, 84.4% recall)
+- DETR: 0.259 weight (35.4% precision, 74.7% recall)
 
 ---
 
-## Salmon Detection with Stacking Meta-Learner
+### Salmon annotation
 
-The salmon detection system uses a **Stacking ensemble approach** that combines three state-of-the-art zero-shot detection models with a trained meta-learner for optimal precision-recall balance.
+Uses a **Stacking meta-learner** combining Grounding DINO, OWL-ViT v2, and Florence-2. Trained on 375 manually cleaned examples.
 
-### Architecture Overview
+| Method | Precision | Recall | F1 Score |
+|--------|-----------|--------|----------|
+| Voting (min-agreement=2) | ~60-70% | ~40% | ~48% |
+| **Stacking (trained)** | **97.5%** | **96.6%** | **97.1%** |
 
-**Base Models (Zero-Shot Detectors)**:
-1. **Grounding DINO** - Visual-linguistic grounding
-2. **OWL-ViT v2** - Open-vocabulary object detection
-3. **Florence-2** - Vision foundation model with grounding
-
-**Meta-Learner**:
-- **Random Forest Classifier** trained on 375 manually cleaned examples
-- Extracts 11 features per detection (model ID, confidence, IoU overlaps, box size/position, etc.)
-- Learns optimal fusion strategy instead of hard-coded voting rules
-
-### Performance Comparison
-
-| Method | Precision | Recall | F1 Score | Auto Decision |
-|--------|-----------|--------|----------|---------------|
-| **Voting (min-agreement=2)** | ~60-70% | ~40% | ~48% | ❌ 30% need review |
-| **Stacking (trained)** | **97.5%** | **96.6%** | **97.1%** | ✅ 100% automatic |
-
-**Key Advantages**:
-- 🎯 **+133% detection rate** compared to voting method
-- 🧠 **Smart fusion** based on learned feature importance
-- ⚡ **Zero manual review** required (97.5% precision)
-- 📊 **Near-perfect AUC-ROC** (99.9%)
-
-### System Requirements
-
-Same as bear detection system:
-- GPU: 8GB+ VRAM (RTX 2080 or better)
-- CUDA: 12.x
-- Python: 3.10
-- Disk: ~8GB for models
-
-### Quick Start Guide
-
-**1. Extract frames from salmon videos**
+**Extract frames**
 ```bash
-python -m src.preprocessing.frame_extractor \
+python -m src.preprocessing.annotation_salmon.frame_extractor \
   --input path/to/salmon_video.mp4 \
   --output data/frames/salmon_video/ \
   --fps 1
 ```
 
-**2. Option A: Use pre-trained Stacking model (Recommended)**
+**Option A: Use pre-trained stacking model (recommended)**
 ```bash
 python -m src.preprocessing.annotation_salmon.predict_stacking \
   --images data/frames/salmon_video/ \
@@ -314,12 +455,7 @@ python -m src.preprocessing.annotation_salmon.predict_stacking \
   --visualize
 ```
 
-**Output**:
-- `data/salmon_results/labels/` - YOLO format labels
-- `data/salmon_results/visualized/` - Detection visualizations
-- Fully automatic, no manual review needed
-
-**2. Option B: Traditional voting method (for comparison)**
+**Option B: Voting method (for comparison / retraining data)**
 ```bash
 python -m src.preprocessing.annotation_salmon.multi_model_annotator \
   --input data/frames/salmon_video/ \
@@ -332,61 +468,21 @@ python -m src.preprocessing.annotation_salmon.multi_model_annotator \
   --florence2-threshold 0.37
 ```
 
-**Note**: Voting method may flag 30% of images for manual review.
-
-### Training Your Own Stacking Model
-
-If you have new salmon videos and want to retrain the meta-learner:
-
-**Step 1: Generate initial annotations**
+**Train your own stacking model**
 ```bash
-# Use voting method with optimized thresholds
-python -m src.preprocessing.annotation_salmon.multi_model_annotator \
-  --input data/frames/salmon_videos/ \
-  --output data/auto_labels_salmon/ \
-  --review-queue data/review_queue/ \
-  --prompt "fish" \
-  --min-agreement 2 \
-  --gdino-threshold 0.37 \
-  --owlvit-threshold 0.37 \
-  --florence2-threshold 0.37
-```
-
-**Step 2: Visualize for manual review**
-```bash
+# Step 1: generate initial annotations (voting method)
+# Step 2: visualize for manual review
 python -m src.preprocessing.annotation_salmon.visualize_nested \
   --images data/frames/salmon_videos/ \
   --labels data/auto_labels_salmon/ \
   --output data/visualized_salmon/
-```
 
-**Step 3: Manual cleanup**
-- Browse `data/visualized_salmon/` folder
-- Delete images with misdetections (bears, birds, water splashes labeled as fish)
-- Keep images with correct fish detections
-
-**Step 4: Sync labels with cleaned images**
-```bash
+# Step 3: sync labels after manual cleanup
 python sync_labels_from_visualized.py \
   --visualized data/visualized_salmon/ \
   --labels data/auto_labels_salmon/
-```
 
-**Step 5: Prepare flat training directory**
-```bash
-mkdir -p data/training_salmon/images data/training_salmon/labels
-
-# Copy cleaned data
-for label in data/auto_labels_salmon/*.txt; do
-  basename="${label##*/}"
-  basename="${basename%.txt}"
-  find data/frames/salmon_videos/ -name "${basename}.jpg" -exec cp {} data/training_salmon/images/ \;
-  cp "$label" data/training_salmon/labels/
-done
-```
-
-**Step 6: Train Stacking meta-learner**
-```bash
+# Step 4: train meta-learner
 python -m src.preprocessing.annotation_salmon.train_stacking \
   --images data/training_salmon/images/ \
   --labels data/training_salmon/labels/ \
@@ -396,379 +492,50 @@ python -m src.preprocessing.annotation_salmon.train_stacking \
   --device cuda
 ```
 
-**Training Output**:
-```
-Dataset collected:
-  Total detections: 6393
-  True Positives: 1637 (25.6%)
-  False Positives: 4756 (74.4%)
+**Prompt recommendation**: Use `--prompt "fish"` — avoids bear misdetections that occur with "salmon" or "jumping salmon".
 
-Validation Performance:
-  Precision: 0.975
-  Recall:    0.966
-  F1 Score:  0.971
-  AUC-ROC:   0.999
-
-Feature Importances:
-  avg_overlap_conf: 0.385  ← Multi-model agreement is key!
-  max_iou: 0.246
-  num_overlaps: 0.178
-  confidence: 0.088
-```
-
-**Expected Training Time**: ~10-15 minutes for 375 images on GPU
-
-### Feature Importance Analysis
-
-The Stacking model learns that **multi-model consensus is most important**:
-
-1. **avg_overlap_conf** (38.5%) - Average confidence of overlapping detections from other models
-2. **max_iou** (24.6%) - Maximum IoU overlap with other detections
-3. **num_overlaps** (17.8%) - Number of other models detecting the same object
-4. **confidence** (8.8%) - Raw model confidence (less reliable alone)
-5. **model_owlvit** (5.7%) - Model-specific patterns
-
-**Key Insight**: A detection is trustworthy when multiple models independently detect it at the same location with high confidence—not just because one model has high confidence.
-
-### Prompt Optimization
-
-Through empirical testing on 5 test images:
-
-| Prompt | Avg Detections | Bear Misdetections |
-|--------|----------------|-------------------|
-| "jumping salmon" | 5.2 | ❌ Yes (2.4/image) |
-| "salmon fish" | 3.4 | ❌ Yes (1.8/image) |
-| "salmon" | 3.0 | ❌ Yes (1.6/image) |
-| **"fish"** | **3.0** | ✅ **No (0/image)** |
-
-**Recommendation**: Use `--prompt "fish"` for best generalization and fewer false positives.
-
-### Threshold Optimization
-
-Default thresholds for voting method:
-- Grounding DINO: 0.37 (was 0.25)
-- OWL-ViT v2: 0.37 (was 0.35)
-- Florence-2: 0.37 (was 0.30)
-
-Higher thresholds reduce false positives by 22.8% while maintaining good recall.
-
-### Output Format
-
-Both methods generate YOLO format labels:
-```
-# data/salmon_results/labels/frame_00123.txt
-0 0.5234 0.3891 0.0823 0.1245
-0 0.7123 0.5234 0.0912 0.1456
-```
-
-Format: `class_id center_x center_y width height` (normalized 0-1)
-
-### Visualizations
-
-Stacking visualizations show:
-- Green bounding boxes
-- Model name (gdino/owlvit/florence2)
-- Stacking confidence (0-1)
-
-Example: `gdino: 0.87` means Grounding DINO detected it, Stacking predicts 87% probability of true positive.
-
-### Troubleshooting Salmon Detection
-
-**Issue: Too many false positives (bears, birds, water)**
-- ✅ Use Stacking method (already trained to filter these)
-- ✅ Increase `--confidence` threshold (try 0.6-0.7)
-- ❌ Don't use prompts like "jumping salmon" (too specific)
-
-**Issue: Missing real salmon**
-- Lower `--confidence` threshold (try 0.4)
-- Check if salmon are very small or partially occluded
-- Consider using `--min-agreement 1` for voting method (then review manually)
-
-**Issue: Slow inference**
-- Each frame takes ~1.7 seconds on RTX 2080
-- Expect ~10-15 minutes for 375 images
-- No way to speed up without better GPU (models run sequentially to fit in 8GB VRAM)
-
-**Issue: Out of memory**
-- Models already load sequentially
-- Close other GPU applications
-- Reduce image resolution if possible
-
-**Issue: Model download timeout**
-```bash
-# Pre-download models manually
-python -c "from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection; \
-AutoProcessor.from_pretrained('google/owlv2-large-patch14-ensemble'); \
-AutoModelForZeroShotObjectDetection.from_pretrained('google/owlv2-large-patch14-ensemble')"
-```
-
-### Files and Directories
-
-**Salmon annotation system files**:
+**Salmon annotation module files**:
 ```
 src/preprocessing/annotation_salmon/
-├── auto_annotator_gdino.py       # Grounding DINO wrapper
-├── auto_annotator_owlvit.py      # OWL-ViT v2 wrapper
-├── auto_annotator_florence2.py   # Florence-2 wrapper
-├── multi_model_annotator.py      # Voting method
-├── train_stacking.py             # Train meta-learner
-├── predict_stacking.py           # Inference with stacking
-└── visualize_nested.py           # Visualize labels
-```
-
-**Pre-trained models**:
-```
-models/
-└── stacker_salmon_fish.pkl       # Trained on 375 cleaned samples
-```
-
-**Typical workflow outputs**:
-```
-data/
-├── frames/salmon_videos/         # Extracted frames
-├── auto_labels_salmon/           # Voting method output
-├── visualized_salmon/            # For manual review
-├── training_salmon/              # Cleaned training data
-│   ├── images/
-│   └── labels/
-└── salmon_results/               # Stacking inference output
-    ├── labels/
-    └── visualized/
-```
-
-### Best Practices
-
-1. **Use Stacking for production**: 97.5% precision, fully automatic
-2. **Use voting for training data generation**: Then manually clean 
-3. **Always visualize first batch**: Verify prompt and thresholds work for your data
-4. **Prompt**: Stick with `"fish"` unless you have specific requirements
-5. **Confidence threshold**: Start with 0.5, increase if too many FPs, decrease if missing detections
-6. **Training frequency**: Retrain stacking model when:
-   - Adding new camera angles
-   - Different lighting conditions (sunrise/sunset vs. midday)
-   - Different seasons (water clarity, background)
-
-### Citation
-
-If you use this salmon detection system in research:
-
-```bibtex
-@software{katmai_salmon_stacking,
-  title={Salmon Detection with Stacking Meta-Learner},
-  author={Katmai Vision Lab},
-  year={2026},
-  note={Multi-model ensemble with learned fusion weights},
-  url={https://github.com/katmai-vision-lab}
-}
+├── auto_annotator_gdino.py
+├── auto_annotator_owlvit.py
+├── auto_annotator_florence2.py
+├── multi_model_annotator.py
+├── train_stacking.py
+├── predict_stacking.py
+└── visualize_nested.py
 ```
 
 ---
 
-## PR Process
-- Do the local development on your own dev branch, eg. dev-yourname
-- Once your code is ready, create a PR merge to main branch
+## Image Enhancement
 
-You may use the following commands.
-```
-git checkout -b dev-xxx origin/main
-git pull origin main
-git push origin dev-xxx
-```
-### Split video
-```
-python -m src.preprocessing.split_dataset \
-    --input data/annotation/bears
-```
-### Training process
-```
-python -m src.detection.train \
-    --data data/annotation/bears/bear.yaml \
-    --config configs/train_config.yaml
-```
+Preprocessing utilities to improve detection on low-quality or small-object footage.
 
-## Run Pipeline
-Quick test with pretrained model.
 ```bash
-python -m src.main \
-    --mode full \
-    --video "bears/2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
-    --skip-train \
-    --epochs 3 \
-    --conf 0.12 \
-    --ground-truth 5
+python -m src.preprocessing.enhancement.image_enhancer \
+    --input data/frames/video_name/ \
+    --output data/enhanced/
 ```
 
-Train + predict + evaluate (original full pipeline).
-```bash
-python -m src.main \
-    --mode full \
-    --video "bears/2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
-    --data data/annotation/bears/bear.yaml \
-    --epochs 3 \
-    --conf 0.25 \
-    --ground-truth 5
-```
+Techniques: CLAHE contrast enhancement, sharpening, denoising, motion blur reduction. Also see `super_resolution.py` and `upscale_realesrgan.py` for RealESRGAN-based upscaling.
 
-Use your fine-tuned model.
-```bash
-python -m src.main \
-    --mode full \
-    --video "bears/2025-09-19 23-30-11_Brooks_Falls_Low_really_0630PM _MDT_5_bears.mkv" \
-    --model models/trained/bear_detector/weights/best.pt \
-    --skip-train \
-    --classes 0 \
-    --conf 0.25 \
-    --ground-truth 5
-```
-```
+---
 
-Bear counting batch.
-```bash
-python -m src.detection.bear_count \
-    --video-dir bears \
-    --pattern "*.mp4"
-```
+## Documentation
 
-```
-python -m src.detection.bear_count \
-    --video-dir bears \
-    --model models/trained/bear_detector3/weights/best.pt \
-    --pattern "*.mp4" \
-    --classes 0 \
-    --conf 0.5
-```
+Full documentation is in [`docs/`](docs/README.md), organized into:
 
-```
-python3 -m src.detection.bear_count \
-    --video-dir bears \
-    --pattern "*.mp4" \
-    --model models/trained/bear_detector3/weights/best.pt \
-    --classes 0 \
-    --conf 0.7 \
-    --tracking \
-    --frame-skip 1 \
-    --verbose
-```
+- [`docs/01-getting-started/`](docs/01-getting-started/installation.md) — installation, first run, hardware guide
+- [`docs/02-how-to-guides/`](docs/02-how-to-guides/detect-and-count-bears.md) — task-oriented guides per module
+- [`docs/03-annotation-and-training/`](docs/03-annotation-and-training/annotate-bears.md) — labeling, fine-tuning, evaluation
+- [`docs/04-technical-reference/`](docs/04-technical-reference/architecture.md) — architecture and module deep-dives
+- [`docs/05-extending/`](docs/05-extending/add-vlm-backend.md) — adding backends, adapting to new datasets
 
-OutPut the Bytetrack video
-```
-python -m src.detection.track_video \
-  --video "bears/0505.mp4" \
-  --model models/trained/bear_detector3/weights/best.pt \
-  --classes 0 \
-  --conf 0.7 \
-  --imgsz 1280 \
-  --frame-skip 1
+**Deepwiki:** https://deepwiki.com/katmai-vision-lab/katmai-cv-pipeline
 
-```
+## Useful Links
 
-## Salmon Jump
-
-### Usage of salmon_jump_counter_cv.py
-```bash
-# Basic — uses defaults only
-python salmon_jump_counter_cv.py video.mov
-
-# Load your saved config
-python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov --config configs/salmon/config.json
-
-# Override just the ROI for a new video, keep everything else from config
-python salmon_jump_counter_cv.py video2.mov --config config.json --roi 100 200 400 300
-
-# Disable ROI entirely
-python salmon_jump_counter_cv.py video.mov --config config.json --no-roi
-
-# Tune blob sizes and gap without editing any file
-python salmon_jump_counter_cv.py video.mov --min-blob-area 600 --max-blob-area 5000 --min-jump-gap-sec 1.0
-
-# Try new HSV values on a different video
-python salmon_jump_counter_cv.py ocean_video.mov --salmon-hsv-lower 5 40 60 --salmon-hsv-upper 25 255 255
-
-# Once happy with a combination, save it as a new config for that environment
-python salmon_jump_counter_cv.py video.mov --roi 0 400 1280 300 --min-blob-area 500 --save-config river_config.json
-```
-
-### Visualization script usage
-```bash
-# Simplest — ROI comes automatically from the embedded config in result.json
-python visualize_jumps.py video.mov result.json
-
-# Override ROI for a different crop
-python visualize_jumps.py video.mov result.json --roi 100 400 500 300
-
-# Use a specific config.json as the ROI source
-python visualize_jumps.py video.mov result.json --config river_config.json
-
-# Strip the ROI overlay off the output video
-python visualize_jumps.py video.mov result.json --no-show-roi
-
-# Custom output path
-python visualize_jumps.py video.mov result.json --output review/jump9_annotated.mp4
-```
-
-**Explaination**
-
-Each debug frame now saves as a 2×2 grid plus a status bar at the bottom:
-```bash
-┌─────────────────────┬─────────────────────┐
-│  annotated original │   fg mask (motion)  │
-│  ROI dim + cyan box │   white = movement  │
-│  green blob circles │                     │
-├─────────────────────┼─────────────────────┤
-│   colour mask       │  combined mask      │
-│   white = salmon    │  fg AND colour      │
-│   HSV range hit     │  AND ROI applied    │
-└─────────────────────┴─────────────────────┘
-│frame 00438 | 7.30s / 15.4s | blobs: 2 | min_area=800 max_area=8000 roi=[491,731,235,307] │
-```
-
-### Full pipeline
-```bash
-python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov --config configs/salmon/config.json > predictions/result.json --debug ./debug_frames/
-
-python src/detection/salmons/visualize_salmon_jumps.py data/raw/salmons/salmon_jump_9.mov predictions/result.json
-```
-
-<!-- ### Extract one frame for calibration
-python -c "
-import cv2
-cap = cv2.VideoCapture('data/raw/salmons/salmon_jump_2.mkv')
-cap.set(cv2.CAP_PROP_POS_FRAMES, 100)
-_, frame = cap.read()
-cv2.imwrite('calibration_frame.jpg', frame)
-cap.release()
-"
-
-Debug mode
-```python
-python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov ./debug_salmon_frames/ > predictions/result.json
-```
-
-Save your result to a file first.
-```python
-python src/detection/salmons/salmon_jump_counter_cv.py data/raw/salmons/salmon_jump_9.mov > predictions/result.json
-```
-Then render.
-```python
-python src/detection/salmons/visualize_salmon_jumps.py data/raw/salmons/salmon_jump_9.mov predictions/result.json
-``` -->
-
-### Parameters
-![alt text](/docs/images/salmon-params.png)
-
-## Background Filter + OpenCV
-### Usage with opions
-# Step 1: run interactively, watch the mask, tune trackbars
-python src/detection/salmons/salmon_jump_counter_bg.py --video data/raw/salmons/salmon_jump_9.mov
-
-# Step 2: re-run with the values printed in the terminal (no interactive steps)
-python src/detection/salmons/salmon_jump_counter_bg.py --video data/raw/salmons/salmon_jump_9.mov \
-  --roi 434,720,710,1062 \
-  --line-y 850 \
-  --var-threshold 40\
-  --min-area 300 \
-  --output data/raw/salmons/salmon_jump_9_result.mp4
-
-## Useful Link
-SharePoint:s
-https://uwnetid.sharepoint.com/sites/katmai-vision-lab/Shared%20Documents/Forms/AllItems.aspx
+- **SharePoint (video data):** https://uwnetid.sharepoint.com/sites/katmai-vision-lab/Shared%20Documents/Forms/AllItems.aspx
+- **PoseSwin dataset (identity module):** https://zenodo.org/records/17822054
+- **Explore.org cameras:** https://explore.org/livecams/brown-bears
